@@ -1,0 +1,13 @@
+# Install with: crontab -e (as the www-data user, or adjust paths/user
+# and use root's crontab with `su www-data -c '...'` per line instead)
+#
+# Two entries — both are load-bearing, not optional:
+#
+# 1. Laravel's scheduler (drives subscriptions:expire, see Phase 10).
+#    Without this, `withSchedule()` in bootstrap/app.php does nothing —
+#    it only defines WHAT should run, this cron is what actually
+#    triggers Laravel to check every minute.
+* * * * * cd /var/www/hotspot-billing/backend && php artisan schedule:run >> /dev/null 2>&1
+
+# 2. Daily database backup at 3:15am server time.
+15 3 * * * /var/www/hotspot-billing/deploy/backup-database.sh /var/www/hotspot-billing/backend/.env /var/backups/hotspot-billing >> /var/log/hotspot-billing/backup.log 2>&1

@@ -1,0 +1,33 @@
+# Environment files and secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local databases and backups
+**/*.sqlite
+**/*.sqlite-*
+**/*.db
+**/*.sql
+**/*.dump
+
+# Dependencies and generated builds
+**/vendor/
+**/node_modules/
+**/dist/
+**/public/build/
+**/public/hot
+
+# Runtime files
+**/storage/logs/
+**/storage/framework/cache/
+**/storage/framework/sessions/
+**/storage/framework/views/
+**/.phpunit.cache/
+**/.phpunit.result.cache
+**/.npm-audit-cache/
+
+# Local editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

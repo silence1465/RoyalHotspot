@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="badge" gradientUnits="userSpaceOnUse" cx="256" cy="256" r="353.28" fx="148.48" fy="133.12">
+      <stop offset="0%" stop-color="#5b52e8"/>
+      <stop offset="100%" stop-color="#332a9e"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112.64" fill="url(#badge)"/>
+  <path d="M194.56,133.12 L194.56,389.12" fill="none" stroke="#f7f6ff" stroke-width="46.08" stroke-linecap="round"/>
+  <path d="M194.56,133.12 Q327.68,133.12 327.68,215.04 Q327.68,286.72 204.8,276.48" fill="none" stroke="#f7f6ff" stroke-width="46.08" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M245.76,276.48 L348.16,389.12" fill="none" stroke="#f7f6ff" stroke-width="46.08" stroke-linecap="round"/>
+  <path d="M369.51,132.92 A92.16,92.16 0 0 1 386.41,286.05" fill="none" stroke="#e9c266" stroke-width="33.28" stroke-linecap="round"/>
+</svg>
