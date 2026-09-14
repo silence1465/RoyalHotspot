@@ -10,6 +10,7 @@ const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'curr
 export default function CustomerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const autoConnectStarted = useRef(false);
+  const provisioningAttempts = useRef(0);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -152,6 +153,11 @@ export default function CustomerDashboard() {
         }
       } catch (err) {
         if (err.response?.status === 404) sessionStorage.removeItem('hotspot_pending_session');
+        if (err.response?.status === 429) {
+          const retryAfter = Math.max(2, Number(err.response.headers?.['retry-after']) || 5);
+          if (!cancelled && attempts < 15) window.setTimeout(confirm, retryAfter * 1000);
+          return;
+        }
       }
       if (!cancelled && attempts < 15) window.setTimeout(confirm, 2000);
     };
@@ -161,18 +167,54 @@ export default function CustomerDashboard() {
 
   useEffect(() => {
     if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current) {
+      return undefined;
+    }
+
+    const hasCredentials = Boolean(
+      (data.hotspot_credentials && !data.hotspot_credentials.disabled) || data.voucher,
+    );
+    const canConnectHere = Boolean(sessionStorage.getItem('guest_login_url'));
+    if (hasCredentials || !canConnectHere || !data.purchase) return undefined;
+
+    if (provisioningAttempts.current >= 30) {
+      setConnection({
+        status: 'failed',
+        message: 'Your hotspot account is taking longer than expected to activate. Tap Connect to WiFi shortly.',
+      });
+      return undefined;
+    }
+
+    setConnection({ status: 'connecting', message: 'Activating your hotspot account...' });
+    const timer = window.setTimeout(async () => {
+      provisioningAttempts.current += 1;
+      try {
+        const response = await api.get('/customer/dashboard');
+        setData(response.data);
+      } catch {
+        // Trigger the next attempt even when this request failed temporarily.
+        setData((current) => ({ ...current }));
+      }
+    }, 2000);
+
+    return () => window.clearTimeout(timer);
+  }, [data, searchParams]);
+
+  useEffect(() => {
+    if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current) {
       return;
     }
 
     const purchase = data.purchase;
-    const credentials = data.hotspot_credentials
-      || (data.voucher ? { username: data.voucher.code, password: data.voucher.code } : null);
+    const credentials = data.hotspot_credentials && !data.hotspot_credentials.disabled
+      ? data.hotspot_credentials
+      : (data.voucher ? { username: data.voucher.code, password: data.voucher.code } : null);
 
     if (!purchase || !credentials || !sessionStorage.getItem('guest_login_url')) {
       return;
     }
 
     autoConnectStarted.current = true;
+    provisioningAttempts.current = 0;
     window.history.replaceState({}, '', '/dashboard');
     handleConnectToWifi(credentials, purchase.id);
   }, [data, handleConnectToWifi, searchParams]);
@@ -255,9 +297,21 @@ export default function CustomerDashboard() {
               <dd className="text-slate-700">{purchase.package.speed_limit || '—'}</dd>
             </div>
             <div>
-              <dt className="text-slate-400">Data limit</dt>
-              <dd className="text-slate-700">{purchase.package.data_limit || 'Unlimited'}</dd>
+              <dt className="text-slate-400">Usage policy</dt>
+              <dd className="text-slate-700">
+                {purchase.usage_policy === 'fup' && `FUP Tier ${purchase.current_fup_tier} (${purchase.fup_period})`}
+                {purchase.usage_policy === 'data_cap' && (purchase.policy_access_status === 'data_exhausted' ? 'Data exhausted' : 'Hard data cap')}
+                {(!purchase.usage_policy || purchase.usage_policy === 'none') && (purchase.package.data_limit || 'Unlimited')}
+              </dd>
             </div>
+            {purchase.usage_policy !== 'none' && purchase.data_allowance_bytes && (
+              <div>
+                <dt className="text-slate-400">Allowance used</dt>
+                <dd className="text-slate-700">
+                  {formatBytes(purchase.fup_period === 'daily' ? bandwidthToday : purchase.cycle_bytes_used)} / {formatBytes(purchase.data_allowance_bytes)}
+                </dd>
+              </div>
+            )}
             <div>
               <dt className="text-slate-400">Time remaining</dt>
               <dd className="text-slate-700 font-medium">

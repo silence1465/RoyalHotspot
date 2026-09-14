@@ -90,7 +90,7 @@ export default function AdminPackages() {
               <th className="px-5 py-3 font-medium">Price</th>
               <th className="px-5 py-3 font-medium">Duration</th>
               <th className="px-5 py-3 font-medium">Guests</th>
-              <th className="px-5 py-3 font-medium">Speed / Data</th>
+              <th className="px-5 py-3 font-medium">Speed / Usage Policy</th>
               <th className="px-5 py-3 font-medium">Routers Mapped</th>
               <th className="px-5 py-3 font-medium">Status</th>
               <th className="px-5 py-3 font-medium text-right">Actions</th>
@@ -123,7 +123,12 @@ export default function AdminPackages() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-slate-600">
-                    {pkg.speed_limit || '—'} {pkg.data_limit ? `/ ${pkg.data_limit}` : '/ Unlimited'}
+                    <div>{pkg.speed_limit || '—'}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">
+                      {pkg.usage_policy === 'fup' && `FUP · ${(Number(pkg.data_allowance_bytes) / 1073741824).toFixed(2)} GB · ${pkg.fup_period}`}
+                      {pkg.usage_policy === 'data_cap' && `Hard cap · ${(Number(pkg.data_allowance_bytes) / 1073741824).toFixed(2)} GB`}
+                      {(!pkg.usage_policy || pkg.usage_policy === 'none') && (pkg.data_limit || 'Unlimited')}
+                    </div>
                   </td>
                   <td className="px-5 py-3 text-slate-600">
                     {pkg.router_profiles?.length ? (

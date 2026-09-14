@@ -61,11 +61,23 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perMinute(12)->by(($request->user()?->id ?? 'guest') . '|' . $request->ip());
         });
 
+        // Session confirmation is intentionally polled every two seconds by
+        // the dashboard while RouterOS completes the browser login. Keep it
+        // separate from the mutation limiter so a normal connection attempt
+        // cannot rate-limit its own status checks.
+        RateLimiter::for('hotspot-status', function ($request) {
+            return Limit::perMinute(60)->by(($request->user()?->id ?? 'guest').'|'.$request->ip());
+        });
+
         // SMS Forwarder webhook — already gated by a shared-secret token
         // (VerifySmsForwarderToken), this is defense-in-depth against a
         // leaked/compromised token being used to flood the endpoint.
         RateLimiter::for('sms-webhook', function ($request) {
             return Limit::perMinute(60)->by($request->ip());
+        });
+
+        RateLimiter::for('mikrotik-unlock', function ($request) {
+            return Limit::perMinute(5)->by(($request->user()?->id ?? 'guest').'|'.$request->ip());
         });
     }
 }

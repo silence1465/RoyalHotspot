@@ -12,12 +12,21 @@ class InternetPackage extends Model
     protected $fillable = [
         'name', 'description', 'price', 'duration_value', 'duration_unit', 'momo_bonus_value', 'momo_bonus_unit',
         'speed_limit', 'data_limit', 'status', 'sales_channel', 'available_to_guests',
+        'usage_policy', 'fup_period', 'data_allowance_bytes',
+        'tier1_threshold_percent', 'tier2_threshold_percent',
+        'tier1_speed_percent', 'tier2_speed_percent', 'tier3_speed_percent',
     ];
 
     protected $casts = [
         'price' => 'decimal:2',
         'available_to_guests' => 'boolean',
         'momo_bonus_value' => 'integer',
+        'data_allowance_bytes' => 'integer',
+        'tier1_threshold_percent' => 'integer',
+        'tier2_threshold_percent' => 'integer',
+        'tier1_speed_percent' => 'integer',
+        'tier2_speed_percent' => 'integer',
+        'tier3_speed_percent' => 'integer',
     ];
 
     public function purchases()

@@ -25,6 +25,7 @@ const DEFAULT_NAV_SECTIONS = [
   {
     label: 'Operations',
     items: [
+      { to: '/admin/router-management', label: 'Router Management', icon: RouterIcon },
       { to: '/admin/routers', label: 'Routers', icon: RouterIcon },
       { to: '/admin/customers', label: 'Customers', icon: Users },
       { to: '/admin/packages', label: 'Packages', icon: Package },
@@ -82,8 +83,8 @@ function NavSections({ sections, onNavigate, badges = {} }) {
                   <Icon className="h-4 w-4 shrink-0" />
                   {label}
                 </span>
-                {badges[to] > 0 && (
-                  <span className="bg-red-500 text-white text-[10px] font-semibold rounded-full h-4 min-w-4 px-1 flex items-center justify-center">
+                {Number.isFinite(Number(badges[to])) && (
+                  <span className="bg-slate-700 text-slate-100 text-[10px] font-semibold rounded-full h-4 min-w-4 px-1 flex items-center justify-center">
                     {badges[to] > 99 ? '99+' : badges[to]}
                   </span>
                 )}

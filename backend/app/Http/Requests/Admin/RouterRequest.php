@@ -37,6 +37,8 @@ class RouterRequest extends FormRequest
             'api_ssl' => ['nullable', 'boolean'],
             'status' => ['nullable', Rule::in(['online', 'offline', 'maintenance'])],
             'connection_mode' => ['nullable', Rule::in(['live', 'manual'])],
+            'momo_enabled' => ['sometimes', 'boolean'],
+            'paystack_enabled' => ['sometimes', 'boolean'],
 
             // Always optional, even on a live router — the automated
             // "Set Up Guest Portal" feature is opt-in, not every router

@@ -16,6 +16,8 @@ const emptyForm = {
   provisioning_api_password: '',
   address_pool: '',
   hotspot_login_host: '',
+  momo_enabled: true,
+  paystack_enabled: true,
 };
 
 export default function RouterFormModal({ router, onClose, onSaved }) {
@@ -36,6 +38,8 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
           provisioning_api_password: '',
           address_pool: router.address_pool || '',
           hotspot_login_host: router.hotspot_login_host || '',
+          momo_enabled: router.momo_enabled ?? true,
+          paystack_enabled: router.paystack_enabled ?? true,
         }
       : emptyForm
   );
@@ -59,7 +63,7 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
     // empty string would get written (and, for api_password, actually
     // encrypted) as a real "blank" value instead of being cleanly absent.
     const payload = isManual
-      ? { name: form.name, location: form.location, connection_mode: form.connection_mode }
+      ? { name: form.name, location: form.location, connection_mode: form.connection_mode, momo_enabled: form.momo_enabled, paystack_enabled: form.paystack_enabled }
       : form;
 
     try {
@@ -91,6 +95,22 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
+        <div>
+          <p className="text-sm font-semibold text-slate-700 mb-2">Customer payment methods</p>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={form.momo_enabled} onChange={(e) => handleChange('momo_enabled', e.target.checked)} />
+              Mobile Money
+            </label>
+            <label className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+              <input type="checkbox" checked={form.paystack_enabled} onChange={(e) => handleChange('paystack_enabled', e.target.checked)} />
+              Paystack
+            </label>
+          </div>
+          {!form.momo_enabled && !form.paystack_enabled && (
+            <p className="mt-2 text-xs text-amber-700">Customers will not be able to buy packages for this router.</p>
+          )}
+        </div>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Connection Mode</label>
           <div className="grid grid-cols-2 gap-2">

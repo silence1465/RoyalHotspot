@@ -3,18 +3,22 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\Admin\ActiveUsersController;
+use App\Http\Controllers\Admin\FreeTrialCampaignController;
 use App\Http\Controllers\Admin\PackageController as AdminPackageController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Customer\PackageController;
 use App\Http\Controllers\Customer\PurchaseController;
 use App\Models\Customer;
+use App\Models\FreeTrialCampaign;
 use App\Models\HotspotUser;
 use App\Models\InternetPackage;
 use App\Models\Purchase;
 use App\Models\Router;
+use App\Models\RouterPackageProfile;
 use App\Models\SystemSetting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use App\Services\PurchaseService;
 use Tests\TestCase;
 
 class OperationalFlowTest extends TestCase
@@ -32,6 +36,56 @@ class OperationalFlowTest extends TestCase
 
         $package->update(['momo_bonus_value' => 2, 'momo_bonus_unit' => 'days']);
         $this->assertSame(2880, $package->fresh()->momoBonusMinutes());
+    }
+
+    public function test_disabling_free_trial_expires_active_claims(): void
+    {
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $package = InternetPackage::factory()->create();
+        RouterPackageProfile::create([
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'profile_name' => 'free-trial-profile',
+        ]);
+        $campaign = FreeTrialCampaign::create([
+            'name' => 'Temporary free access',
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+        ]);
+        $customer = Customer::factory()->active()->create();
+        $purchase = Purchase::create([
+            'customer_id' => $customer->id,
+            'free_trial_campaign_id' => $campaign->id,
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'subtotal' => 0,
+            'payment_fee' => 0,
+            'amount' => 0,
+            'reference' => 'RW-FREE01',
+            'payment_method' => 'free_trial',
+            'fulfillment_type' => 'live',
+            'status' => 'active',
+            'starts_at' => now(),
+            'expires_at' => $campaign->ends_at,
+        ]);
+
+        $request = Request::create('/api/v1/admin/free-trials/'.$campaign->id, 'PUT', [
+            'name' => $campaign->name,
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'starts_at' => $campaign->starts_at->toIso8601String(),
+            'ends_at' => $campaign->ends_at->toIso8601String(),
+            'is_active' => false,
+        ]);
+        $response = app(FreeTrialCampaignController::class)
+            ->update($request, $campaign, app(PurchaseService::class));
+
+        $this->assertSame(1, $response->getData(true)['revoked_claims']);
+        $this->assertSame('expired', $purchase->fresh()->status);
+        $this->assertSame('inactive', $customer->fresh()->status);
     }
 
     public function test_checkout_reports_enabled_gateways_and_rejects_a_disabled_one(): void

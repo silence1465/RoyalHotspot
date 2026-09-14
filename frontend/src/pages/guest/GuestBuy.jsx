@@ -28,6 +28,7 @@ export default function GuestBuy() {
   const routerId = searchParams.get('router');
 
   const [routerName, setRouterName] = useState('');
+  const [momoAvailable, setMomoAvailable] = useState(true);
   const [packages, setPackages] = useState([]);
   const [selected, setSelected] = useState(null);
   const [phone, setPhone] = useState('');
@@ -58,6 +59,7 @@ export default function GuestBuy() {
       .then(({ data }) => {
         setRouterName(data.router?.name || '');
         setPackages(data.packages || []);
+        setMomoAvailable(data.payment_methods?.momo !== false);
       })
       .catch(() => setError('Could not load packages. Please try again shortly.'))
       .finally(() => setLoading(false));
@@ -108,6 +110,12 @@ export default function GuestBuy() {
           {routerName && <p className="text-slate-500 text-sm mt-1">{routerName}</p>}
         </div>
 
+        {!momoAvailable && (
+          <p className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Mobile Money payments are currently unavailable at this location.
+          </p>
+        )}
+
         {selected ? (
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
             <p className="text-sm text-slate-700 mb-4">
@@ -151,7 +159,7 @@ export default function GuestBuy() {
             {packages.length === 0 && (
               <p className="text-center text-slate-400 text-sm py-8">No packages available right now.</p>
             )}
-            {packages.map((pkg) => (
+            {momoAvailable && packages.map((pkg) => (
               <button
                 key={pkg.id}
                 onClick={() => setSelected(pkg)}

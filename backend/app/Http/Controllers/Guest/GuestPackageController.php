@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Guest;
 
 use App\Http\Controllers\Controller;
 use App\Models\Router;
+use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 
 class GuestPackageController extends Controller
@@ -51,6 +52,10 @@ class GuestPackageController extends Controller
         return response()->json([
             'router' => ['id' => $router->id, 'name' => $router->name],
             'packages' => $packages,
+            'payment_methods' => [
+                'momo' => $router->momo_enabled
+                    && filter_var(SystemSetting::get('momo_enabled', '1'), FILTER_VALIDATE_BOOLEAN),
+            ],
         ]);
     }
 }

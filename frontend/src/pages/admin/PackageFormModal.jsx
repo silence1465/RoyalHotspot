@@ -13,6 +13,14 @@ const emptyForm = {
   momo_bonus_unit: 'days',
   speed_limit: '',
   data_limit: '',
+  usage_policy: 'none',
+  fup_period: 'cycle',
+  data_allowance_gb: '',
+  tier1_threshold_percent: 60,
+  tier2_threshold_percent: 85,
+  tier1_speed_percent: 100,
+  tier2_speed_percent: 70,
+  tier3_speed_percent: 30,
   status: 'active',
   available_to_guests: false,
 };
@@ -31,6 +39,14 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
           momo_bonus_unit: pkg.momo_bonus_unit || 'days',
           speed_limit: pkg.speed_limit || '',
           data_limit: pkg.data_limit || '',
+          usage_policy: pkg.usage_policy || 'none',
+          fup_period: pkg.fup_period || 'cycle',
+          data_allowance_gb: pkg.data_allowance_bytes ? Number(pkg.data_allowance_bytes) / 1073741824 : '',
+          tier1_threshold_percent: pkg.tier1_threshold_percent ?? 60,
+          tier2_threshold_percent: pkg.tier2_threshold_percent ?? 85,
+          tier1_speed_percent: pkg.tier1_speed_percent ?? 100,
+          tier2_speed_percent: pkg.tier2_speed_percent ?? 70,
+          tier3_speed_percent: pkg.tier3_speed_percent ?? 30,
           status: pkg.status,
           available_to_guests: Boolean(pkg.available_to_guests),
         }
@@ -68,8 +84,12 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
     setErrors({});
     setServerError('');
 
+    const { data_allowance_gb, ...formValues } = form;
     const payload = {
-      ...form,
+      ...formValues,
+      data_allowance_bytes: form.usage_policy === 'none' || data_allowance_gb === ''
+        ? null
+        : Math.round(Number(data_allowance_gb) * 1073741824),
       profiles: profiles.filter((p) => p.router_id && p.profile_name),
     };
 
@@ -203,6 +223,58 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
               <option value="inactive">Inactive</option>
             </select>
           </Field>
+        </div>
+
+        <div className="border border-slate-200 rounded-md p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-800">Usage policy</h3>
+            <p className="text-xs text-slate-400 mt-1">Upload and download traffic both count toward the allowance.</p>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <Field label="Policy type" error={fieldError('usage_policy')}>
+              <select className="input" value={form.usage_policy} onChange={(e) => handleChange('usage_policy', e.target.value)}>
+                <option value="none">No usage policy</option>
+                <option value="fup">Three-tier FUP (service continues)</option>
+                <option value="data_cap">Hard data cap (service stops)</option>
+              </select>
+            </Field>
+            {form.usage_policy !== 'none' && (
+              <Field label="Data allowance (GB)" error={fieldError('data_allowance_bytes')}>
+                <input type="number" min="0.001" step="0.001" required className="input" value={form.data_allowance_gb} onChange={(e) => handleChange('data_allowance_gb', e.target.value)} />
+              </Field>
+            )}
+            {form.usage_policy === 'fup' && (
+              <Field label="FUP reset period" error={fieldError('fup_period')}>
+                <select className="input" value={form.fup_period} onChange={(e) => handleChange('fup_period', e.target.value)}>
+                  <option value="daily">Daily</option>
+                  <option value="cycle">Subscription cycle</option>
+                </select>
+              </Field>
+            )}
+          </div>
+          {form.usage_policy === 'fup' && (
+            <div className="grid sm:grid-cols-3 gap-3">
+              <Field label="Tier 1 ends at %" error={fieldError('tier1_threshold_percent')}>
+                <input type="number" min="1" max="98" className="input" value={form.tier1_threshold_percent} onChange={(e) => handleChange('tier1_threshold_percent', Number(e.target.value))} />
+              </Field>
+              <Field label="Tier 2 ends at %" error={fieldError('tier2_threshold_percent')}>
+                <input type="number" min="2" max="99" className="input" value={form.tier2_threshold_percent} onChange={(e) => handleChange('tier2_threshold_percent', Number(e.target.value))} />
+              </Field>
+              <div />
+              <Field label="Tier 1 speed %" error={fieldError('tier1_speed_percent')}>
+                <input type="number" min="1" max="100" className="input" value={form.tier1_speed_percent} onChange={(e) => handleChange('tier1_speed_percent', Number(e.target.value))} />
+              </Field>
+              <Field label="Tier 2 speed %" error={fieldError('tier2_speed_percent')}>
+                <input type="number" min="1" max="100" className="input" value={form.tier2_speed_percent} onChange={(e) => handleChange('tier2_speed_percent', Number(e.target.value))} />
+              </Field>
+              <Field label="Tier 3 speed %" error={fieldError('tier3_speed_percent')}>
+                <input type="number" min="1" max="100" className="input" value={form.tier3_speed_percent} onChange={(e) => handleChange('tier3_speed_percent', Number(e.target.value))} />
+              </Field>
+            </div>
+          )}
+          {form.usage_policy === 'data_cap' && (
+            <p className="text-xs text-amber-700 bg-amber-50 rounded-md px-3 py-2">Access stops when the allowance is consumed or the package expires, whichever happens first. No FUP tiers apply.</p>
+          )}
         </div>
 
         <Field label="Description (optional, shown to customers)" error={fieldError('description')}>

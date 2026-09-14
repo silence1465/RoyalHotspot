@@ -14,6 +14,8 @@ function formatBytes(bytes) {
 export default function AdminBandwidth() {
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState('');
+  const [capacityForm, setCapacityForm] = useState({ capacity_gb: '', reserve_percent: 15, reason: '' });
+  const [savingCapacity, setSavingCapacity] = useState(false);
 
   const [historyPeriod, setHistoryPeriod] = useState('day');
   const [historyMonth, setHistoryMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -22,12 +24,29 @@ export default function AdminBandwidth() {
   const usersPagination = useClientPagination(summary?.users || []);
   const historyPagination = useClientPagination(history || []);
 
-  useEffect(() => {
+  const loadSummary = useCallback(() => {
     api
       .get('/admin/bandwidth/summary')
       .then(({ data }) => setSummary(data))
       .catch(() => setError('Could not load bandwidth data.'));
   }, []);
+
+  useEffect(() => { loadSummary(); }, [loadSummary]);
+
+  const saveCapacity = async (event) => {
+    event.preventDefault();
+    setSavingCapacity(true);
+    setError('');
+    try {
+      await api.post('/admin/bandwidth/capacity', capacityForm);
+      setCapacityForm((value) => ({ ...value, capacity_gb: '', reason: '' }));
+      await loadSummary();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not update monthly capacity.');
+    } finally {
+      setSavingCapacity(false);
+    }
+  };
 
   const loadHistory = useCallback(() => {
     const params = historyPeriod === 'month' ? { period: 'month', year: historyYear } : { period: 'day', month: historyMonth };
@@ -48,7 +67,7 @@ export default function AdminBandwidth() {
         <p className="text-slate-500 text-sm mt-1">Usage across live routers. Manual routers have no visibility into this.</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Today (all users)"
           value={formatBytes(summary.today_total.bytes_in + summary.today_total.bytes_out)}
@@ -59,6 +78,70 @@ export default function AdminBandwidth() {
           value={formatBytes(summary.month_total.bytes_in + summary.month_total.bytes_out)}
           tone="positive"
         />
+        <StatCard
+          label="Total Capacity"
+          value={summary.capacity ? formatBytes(summary.capacity.capacity_bytes) : 'Not set'}
+          tone="positive"
+        />
+        <StatCard
+          label="Remaining Capacity"
+          value={summary.capacity ? formatBytes(summary.capacity.remaining_bytes) : 'Not set'}
+          tone={summary.capacity?.control?.level === 'critical' ? 'negative' : 'positive'}
+        />
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">Monthly capacity control</h2>
+            <p className="text-xs text-slate-400 mt-1">Capacity can be adjusted during the month. Existing usage is never reset.</p>
+          </div>
+          {summary.capacity && (
+            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase ${summary.capacity.control.level === 'green' ? 'bg-emerald-50 text-emerald-700' : summary.capacity.control.level === 'amber' ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
+              {summary.capacity.control.level}
+            </span>
+          )}
+        </div>
+
+        {summary.capacity ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+            <div><p className="text-slate-400 text-xs">Total capacity</p><p className="font-semibold">{formatBytes(summary.capacity.capacity_bytes)}</p></div>
+            <div><p className="text-slate-400 text-xs">Usable after reserve</p><p className="font-semibold">{formatBytes(summary.capacity.usable_bytes)}</p></div>
+            <div><p className="text-slate-400 text-xs">Remaining</p><p className="font-semibold">{formatBytes(summary.capacity.remaining_bytes)}</p></div>
+            <div><p className="text-slate-400 text-xs">New daily target</p><p className="font-semibold">{formatBytes(summary.capacity.daily_target_bytes)}</p></div>
+            <div><p className="text-slate-400 text-xs">Projected month end</p><p className="font-semibold">{formatBytes(summary.capacity.projected_month_end_bytes)}</p></div>
+            <div><p className="text-slate-400 text-xs">Reserve</p><p className="font-semibold">{summary.capacity.reserve_percent}%</p></div>
+          </div>
+        ) : <p className="text-sm text-amber-700">No capacity has been configured for this month.</p>}
+
+        <form onSubmit={saveCapacity} className="grid sm:grid-cols-4 gap-3 items-end">
+          <label className="text-xs text-slate-600">Capacity (GB)
+            <input type="number" min="0.001" step="0.001" required className="input mt-1" value={capacityForm.capacity_gb} onChange={(e) => setCapacityForm((v) => ({ ...v, capacity_gb: e.target.value }))} />
+          </label>
+          <label className="text-xs text-slate-600">Reserve %
+            <input type="number" min="0" max="90" required className="input mt-1" value={capacityForm.reserve_percent} onChange={(e) => setCapacityForm((v) => ({ ...v, reserve_percent: Number(e.target.value) }))} />
+          </label>
+          <label className="text-xs text-slate-600">Adjustment reason
+            <input required className="input mt-1" placeholder="Initial allocation or additional data" value={capacityForm.reason} onChange={(e) => setCapacityForm((v) => ({ ...v, reason: e.target.value }))} />
+          </label>
+          <button disabled={savingCapacity} className="px-4 py-2 rounded-md bg-indigo-600 text-white text-sm font-medium disabled:opacity-50">{savingCapacity ? 'Saving…' : 'Update capacity'}</button>
+        </form>
+
+        {summary.capacity_history?.length > 0 && (
+          <div className="border-t border-slate-100 pt-3">
+            <p className="text-xs font-semibold text-slate-600 mb-2">This month’s adjustments</p>
+            <div className="space-y-1 text-xs text-slate-500">
+              {summary.capacity_history.map((entry) => (
+                <div key={entry.id} className="flex flex-wrap gap-x-3">
+                  <span>{new Date(entry.created_at).toLocaleString()}</span>
+                  <span>{formatBytes(entry.capacity_bytes)}</span>
+                  <span>{entry.reserve_percent}% reserve</span>
+                  <span>{entry.reason}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">

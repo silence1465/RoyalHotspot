@@ -34,6 +34,12 @@ class GuestPurchaseController extends Controller
         $router = Router::findOrFail($validated['router_id']);
         $pricing = app(CheckoutFeeService::class)->calculate($package->price);
 
+        $momoEnabled = $router->momo_enabled
+            && filter_var(SystemSetting::get('momo_enabled', '1'), FILTER_VALIDATE_BOOLEAN);
+        if (! $momoEnabled) {
+            return response()->json(['message' => 'Mobile Money payments are not available at this location.'], 422);
+        }
+
         if (! $package->available_to_guests) {
             return response()->json(['message' => 'This package is not available for guest purchase.'], 422);
         }

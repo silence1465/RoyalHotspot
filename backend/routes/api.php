@@ -57,28 +57,87 @@ Route::prefix('v1')->group(function () {
         Route::post('/mfa/confirm', [\App\Http\Controllers\Auth\AdminTwoFactorController::class, 'confirm'])->middleware('role:super_admin,admin');
         Route::post('/mfa/disable', [\App\Http\Controllers\Auth\AdminTwoFactorController::class, 'disable'])->middleware('role:super_admin,admin');
 
+        Route::get('/mikrotik-security/status', [\App\Http\Controllers\Admin\MikrotikSecurityController::class, 'status'])->middleware('role:super_admin,admin');
+        Route::post('/mikrotik-security/unlock', [\App\Http\Controllers\Admin\MikrotikSecurityController::class, 'unlock'])->middleware(['role:super_admin,admin', 'throttle:mikrotik-unlock']);
+        Route::post('/mikrotik-security/lock', [\App\Http\Controllers\Admin\MikrotikSecurityController::class, 'lock'])->middleware('role:super_admin,admin');
+
         Route::get('/dashboard/stats', [\App\Http\Controllers\Admin\DashboardController::class, 'stats']);
         Route::get('/dashboard/chart-data', [\App\Http\Controllers\Admin\DashboardController::class, 'chartData']);
         Route::get('/notifications/summary', [\App\Http\Controllers\Admin\NotificationController::class, 'summary']);
-        Route::get('/active-users', [\App\Http\Controllers\Admin\ActiveUsersController::class, 'index']);
+        Route::get('/active-users', [\App\Http\Controllers\Admin\ActiveUsersController::class, 'index'])->middleware('mikrotik-unlocked');
         Route::post('/active-users/reset-session', [\App\Http\Controllers\Admin\ActiveUsersController::class, 'resetSession'])
-            ->middleware('role:super_admin,admin');
-        Route::get('/bandwidth/summary', [\App\Http\Controllers\Admin\BandwidthController::class, 'summary']);
-        Route::get('/bandwidth/history', [\App\Http\Controllers\Admin\BandwidthController::class, 'history']);
+            ->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
+        Route::get('/bandwidth/summary', [\App\Http\Controllers\Admin\BandwidthController::class, 'summary'])->middleware('mikrotik-unlocked');
+        Route::get('/bandwidth/history', [\App\Http\Controllers\Admin\BandwidthController::class, 'history'])->middleware('mikrotik-unlocked');
+        Route::post('/bandwidth/capacity', [\App\Http\Controllers\Admin\BandwidthController::class, 'updateCapacity'])
+            ->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
         Route::get('/search', [\App\Http\Controllers\Admin\SearchController::class, 'index']);
 
         Route::apiResource('routers', \App\Http\Controllers\Admin\RouterController::class)
-            ->middleware('role:super_admin,admin');
+            ->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
         Route::post('/routers/{router}/test-connection', [\App\Http\Controllers\Admin\RouterController::class, 'testConnection'])
-            ->middleware('role:super_admin,admin');
+            ->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
         Route::post('/routers/{router}/setup-guest-portal', [\App\Http\Controllers\Admin\RouterController::class, 'setupGuestPortal'])
-            ->middleware('role:super_admin,admin');
+            ->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
+
+        Route::middleware(['role:super_admin,admin', 'mikrotik-unlocked'])->prefix('router-management/{router}')->group(function () {
+            Route::get('/overview', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'overview']);
+            Route::get('/users', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'users']);
+            Route::post('/users', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeUser']);
+            Route::patch('/users/{userId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateUser']);
+            Route::delete('/users/{userId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyUser']);
+            Route::get('/hosts', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'hosts']);
+            Route::get('/bindings', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'bindings']);
+            Route::post('/bindings', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeBinding']);
+            Route::patch('/bindings/{bindingId}/status', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'setBindingStatus']);
+            Route::patch('/bindings/{bindingId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateBinding']);
+            Route::delete('/bindings/{bindingId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyBinding']);
+            Route::get('/profiles', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'profiles']);
+            Route::post('/profiles', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeProfile']);
+            Route::patch('/profiles/{profileId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateProfile']);
+            Route::delete('/profiles/{profileId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyProfile']);
+            Route::get('/dhcp-servers', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'dhcpServers']);
+            Route::get('/dhcp-leases', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'dhcpLeases']);
+            Route::post('/dhcp-leases/{leaseId}/make-static', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'makeLeaseStatic']);
+            Route::delete('/dhcp-leases/{leaseId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyLease']);
+            Route::patch('/dhcp-leases/{leaseId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateLease']);
+            Route::get('/queues', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'queues']);
+            Route::post('/queues', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeQueue']);
+            Route::patch('/queues/{queueId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateQueue']);
+            Route::delete('/queues/{queueId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyQueue']);
+            Route::get('/router-logs', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'routerLogs']);
+            Route::get('/address-lists', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'addressLists']);
+            Route::post('/address-lists', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeAddressList']);
+            Route::patch('/address-lists/{entryId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateAddressList']);
+            Route::delete('/address-lists/{entryId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyAddressList']);
+            Route::get('/backups', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'backups']);
+            Route::post('/backups', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeBackup']);
+            Route::delete('/backups/{fileId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyBackup']);
+            Route::get('/system-information', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'systemInformation']);
+            Route::post('/diagnostics', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'diagnostic']);
+            Route::post('/terminal', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'terminal']);
+            Route::get('/modules/{module}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'expandedModule']);
+            Route::post('/modules/{module}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeExpanded']);
+            Route::patch('/modules/{module}/{itemId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateExpanded']);
+            Route::delete('/modules/{module}/{itemId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyExpanded']);
+            Route::get('/bridges', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'bridges']);
+            Route::post('/bridges', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeBridge']);
+            Route::patch('/bridges/{bridgeId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateBridge']);
+            Route::delete('/bridges/{bridgeId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyBridge']);
+            Route::get('/bridge-ports', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'bridgePorts']);
+            Route::post('/bridge-ports', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'storeBridgePort']);
+            Route::patch('/bridge-ports/{portId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'updateBridgePort']);
+            Route::delete('/bridge-ports/{portId}', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'destroyBridgePort']);
+            Route::get('/bridge-hosts', [\App\Http\Controllers\Admin\MikrotikManagementController::class, 'bridgeHosts']);
+        });
 
         Route::apiResource('packages', \App\Http\Controllers\Admin\PackageController::class)
-            ->middleware('role:super_admin,admin');
+            ->only(['index', 'show'])->middleware('role:super_admin,admin');
+        Route::apiResource('packages', \App\Http\Controllers\Admin\PackageController::class)
+            ->only(['store', 'update', 'destroy'])->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
         Route::apiResource('free-trials', \App\Http\Controllers\Admin\FreeTrialCampaignController::class)
             ->parameters(['free-trials' => 'campaign'])->except('show')
-            ->middleware('role:super_admin,admin');
+            ->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
 
         Route::get('/customers', [\App\Http\Controllers\Admin\CustomerController::class, 'index']);
         Route::get('/customers/{customer}', [\App\Http\Controllers\Admin\CustomerController::class, 'show']);
@@ -101,7 +160,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/vouchers/inventory', [\App\Http\Controllers\Admin\VoucherController::class, 'inventory'])->middleware('role:super_admin,admin');
         Route::post('/vouchers/generate', [\App\Http\Controllers\Admin\VoucherController::class, 'generate'])->middleware('role:super_admin,admin');
         Route::delete('/vouchers/{voucher}', [\App\Http\Controllers\Admin\VoucherController::class, 'destroy'])->middleware('role:super_admin,admin');
-        Route::post('/vouchers/{voucher}/check-mikrotik-status', [\App\Http\Controllers\Admin\VoucherController::class, 'checkMikrotikStatus'])->middleware('role:super_admin,admin');
+        Route::post('/vouchers/{voucher}/check-mikrotik-status', [\App\Http\Controllers\Admin\VoucherController::class, 'checkMikrotikStatus'])->middleware(['role:super_admin,admin', 'mikrotik-unlocked']);
 
         Route::middleware('role:super_admin,admin')->group(function () {
             Route::get('/vouchers/import', [\App\Http\Controllers\Admin\VoucherImportController::class, 'index']);
@@ -111,7 +170,7 @@ Route::prefix('v1')->group(function () {
             Route::post('/vouchers/import/{batch}/cancel', [\App\Http\Controllers\Admin\VoucherImportController::class, 'cancel']);
         });
 
-        Route::get('/mikrotik-logs', [\App\Http\Controllers\Admin\LogController::class, 'mikrotikLogs']);
+        Route::get('/mikrotik-logs', [\App\Http\Controllers\Admin\LogController::class, 'mikrotikLogs'])->middleware('mikrotik-unlocked');
         Route::get('/activity-logs', [\App\Http\Controllers\Admin\LogController::class, 'activityLogs']);
         Route::get('/sms-logs', [\App\Http\Controllers\Admin\LogController::class, 'smsLogs']);
 
@@ -120,7 +179,7 @@ Route::prefix('v1')->group(function () {
             ->middleware('role:super_admin,admin');
         Route::get('/reports/payments', [\App\Http\Controllers\Admin\ReportController::class, 'payments']);
         Route::get('/reports/customers', [\App\Http\Controllers\Admin\ReportController::class, 'customers']);
-        Route::get('/reports/router-activity', [\App\Http\Controllers\Admin\ReportController::class, 'routerActivity']);
+        Route::get('/reports/router-activity', [\App\Http\Controllers\Admin\ReportController::class, 'routerActivity'])->middleware('mikrotik-unlocked');
 
         Route::get('/settings', [\App\Http\Controllers\Admin\SettingController::class, 'index'])->middleware('role:super_admin,admin');
         Route::put('/settings', [\App\Http\Controllers\Admin\SettingController::class, 'update'])->middleware('role:super_admin,admin');
@@ -143,7 +202,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/hotspot/sessions/prepare', [\App\Http\Controllers\Customer\HotspotSessionController::class, 'prepare'])
             ->middleware('throttle:hotspot-connect');
         Route::get('/hotspot/sessions/{session}', [\App\Http\Controllers\Customer\HotspotSessionController::class, 'status'])
-            ->middleware('throttle:hotspot-connect');
+            ->middleware('throttle:hotspot-status');
 
         // Unified purchases — replaces PaymentController + OrderController
         Route::get('/purchases', [\App\Http\Controllers\Customer\PurchaseController::class, 'index']);

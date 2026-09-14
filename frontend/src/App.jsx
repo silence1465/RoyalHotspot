@@ -29,9 +29,9 @@ import AdminLogin from './pages/admin/Login';
 // otherwise pay for that weight in the shared bundle even though they
 // never render a chart.
 const AdminDashboard = lazy(() => import('./pages/admin/Dashboard'));
-import AdminRouters from './pages/admin/Routers';
+import AdminRoutersPage from './pages/admin/Routers';
 import AdminCustomers from './pages/admin/Customers';
-import AdminPackages from './pages/admin/Packages';
+import AdminPackagesPage from './pages/admin/Packages';
 import AdminPurchases from './pages/admin/Purchases';
 import AdminPayments from './pages/admin/Payments';
 import AdminVouchers from './pages/admin/Vouchers';
@@ -40,10 +40,18 @@ import AdminSettings from './pages/admin/Settings';
 import AdminFreeTrials from './pages/admin/FreeTrials';
 import CustomerFreeTrial from './pages/customer/FreeTrial';
 import AdminComplaints from './pages/admin/Complaints';
-import AdminBandwidth from './pages/admin/Bandwidth';
+import AdminBandwidthPage from './pages/admin/Bandwidth';
 import AdminAssignPackage from './pages/admin/AssignPackage';
-import AdminActiveSessions from './pages/admin/ActiveSessions';
+import AdminActiveSessionsPage from './pages/admin/ActiveSessions';
 import AccountingHistory from './pages/admin/AccountingHistory';
+import MikrotikSecurityGate from './components/MikrotikSecurityGate';
+import RouterManagementPage from './pages/admin/RouterManagement';
+
+const AdminRouters = () => <MikrotikSecurityGate><AdminRoutersPage /></MikrotikSecurityGate>;
+const AdminPackages = () => <MikrotikSecurityGate><AdminPackagesPage /></MikrotikSecurityGate>;
+const AdminBandwidth = () => <MikrotikSecurityGate><AdminBandwidthPage /></MikrotikSecurityGate>;
+const AdminActiveSessions = () => <MikrotikSecurityGate><AdminActiveSessionsPage /></MikrotikSecurityGate>;
+const RouterManagement = () => <MikrotikSecurityGate><RouterManagementPage /></MikrotikSecurityGate>;
 
 function App() {
   return (
@@ -82,6 +90,9 @@ function App() {
           </Route>
 
           {/* Admin */}
+          <Route path='/admin/router-management' element={<ProtectedRoute requiredRole='admin' />}>
+            <Route element={<AdminLayout />}><Route index element={<RouterManagement />} /></Route>
+          </Route>
           <Route path="/admin/login" element={<AdminLogin />} />
           <Route element={<ProtectedRoute requiredRole="admin" />}>
             <Route element={<AdminLayout />}>

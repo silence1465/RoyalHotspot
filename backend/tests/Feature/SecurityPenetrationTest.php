@@ -180,6 +180,37 @@ class SecurityPenetrationTest extends TestCase
         $this->assertSame('pending', $payment->status);
     }
 
+    public function test_customer_cannot_bypass_router_payment_gateway_setting(): void
+    {
+        $customer = Customer::factory()->active()->create();
+        $router = Router::factory()->create([
+            'connection_mode' => 'live',
+            'momo_enabled' => false,
+            'paystack_enabled' => true,
+        ]);
+        $package = InternetPackage::factory()->create(['status' => 'active']);
+        RouterPackageProfile::create([
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'profile_name' => 'router-gateway-test',
+            'shared_users' => 1,
+        ]);
+        SystemSetting::set('momo_enabled', true);
+
+        $token = $customer->createToken('router-gateway-test', ['customer'])->plainTextToken;
+        $this->withToken($token)->postJson('/api/v1/customer/purchases', [
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'payment_method' => 'momo',
+        ])->assertUnprocessable()
+            ->assertJsonPath('errors.payment_method.0', 'This payment method is disabled for the selected router.');
+
+        $this->assertDatabaseMissing('purchases', [
+            'customer_id' => $customer->id,
+            'router_id' => $router->id,
+        ]);
+    }
+
     private function makePurchase(Customer $customer, string $reference): Purchase
     {
         $router = Router::factory()->create(['connection_mode' => 'live']);

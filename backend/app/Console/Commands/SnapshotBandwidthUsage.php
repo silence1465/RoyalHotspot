@@ -5,6 +5,8 @@ namespace App\Console\Commands;
 use App\Models\BandwidthLog;
 use App\Models\HotspotUser;
 use App\Models\Router;
+use App\Models\Purchase;
+use App\Jobs\ApplyUsagePolicyJob;
 use App\Services\MikrotikService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -52,7 +54,7 @@ class SnapshotBandwidthUsage extends Command
                     ? $currentOut - $hotspotUser->last_bytes_out
                     : $currentOut;
 
-                DB::transaction(function () use ($hotspotUser, $router, $today, $deltaIn, $deltaOut, $currentIn, $currentOut) {
+                $purchaseId = DB::transaction(function () use ($hotspotUser, $router, $today, $deltaIn, $deltaOut, $currentIn, $currentOut) {
                     $log = BandwidthLog::firstOrNew([
                         'customer_id' => $hotspotUser->customer_id,
                         'router_id' => $router->id,
@@ -67,7 +69,29 @@ class SnapshotBandwidthUsage extends Command
                         'last_bytes_out' => $currentOut,
                         'last_polled_at' => now(),
                     ]);
+
+                    $purchase = Purchase::where('customer_id', $hotspotUser->customer_id)
+                        ->where('router_id', $router->id)
+                        ->where('fulfillment_type', 'live')
+                        ->where('status', 'active')
+                        ->where(function ($query) {
+                            $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
+                        })
+                        ->latest('id')
+                        ->lockForUpdate()
+                        ->first();
+
+                    if ($purchase && in_array($purchase->usage_policy, ['fup', 'data_cap'], true)) {
+                        $purchase->increment('cycle_bytes_used', $deltaIn + $deltaOut);
+                        return $purchase->id;
+                    }
+
+                    return null;
                 });
+
+                if ($purchaseId) {
+                    ApplyUsagePolicyJob::dispatch($purchaseId);
+                }
 
                 $polled++;
             }

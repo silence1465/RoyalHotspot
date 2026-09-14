@@ -38,6 +38,10 @@ export default function BuyInternet() {
   const [paymentMethod, setPaymentMethod] = useState('momo');
   const [paymentMethods, setPaymentMethods] = useState({ paystack: true, momo: true });
 
+  const selectedRouter = selected?.available_routers?.find((router) => String(router.id) === routerId);
+  const availablePaymentMethods = selectedRouter?.payment_methods || paymentMethods;
+  const hasAvailablePaymentMethod = availablePaymentMethods.momo || availablePaymentMethods.paystack;
+
   useEffect(() => {
     api
       .get('/customer/packages')
@@ -52,9 +56,12 @@ export default function BuyInternet() {
   }, []);
 
   const handleSelect = (pkg) => {
+    const onlyRouter = pkg.available_routers?.length === 1 ? pkg.available_routers[0] : null;
+    const methods = onlyRouter?.payment_methods || paymentMethods;
     setSelected(pkg);
     setActionError('');
-    setRouterId(pkg.available_routers?.length === 1 ? String(pkg.available_routers[0].id) : '');
+    setRouterId(onlyRouter ? String(onlyRouter.id) : '');
+    setPaymentMethod(methods.momo ? 'momo' : 'paystack');
     // The summary panel renders above the package grid — without this,
     // tapping "Buy" on a card further down the list (very likely on
     // mobile, where several packages are stacked vertically) leaves the
@@ -120,7 +127,12 @@ export default function BuyInternet() {
           {selected.available_routers?.length > 1 && (
             <div className="mb-3">
               <label className="block text-xs font-medium text-indigo-900 mb-1">Location</label>
-              <select className="input" value={routerId} onChange={(e) => setRouterId(e.target.value)}>
+              <select className="input" value={routerId} onChange={(e) => {
+                const value = e.target.value;
+                const router = selected.available_routers.find((item) => String(item.id) === value);
+                setRouterId(value);
+                setPaymentMethod(router?.payment_methods?.momo ? 'momo' : 'paystack');
+              }}>
                 <option value="">Select a location…</option>
                 {selected.available_routers.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -142,12 +154,16 @@ export default function BuyInternet() {
             </p>
           )}
 
+          {routerId && !hasAvailablePaymentMethod && (
+            <p className="text-sm text-amber-700 mb-3">Payments are currently unavailable at this location.</p>
+          )}
+
           {actionError && <p className="text-sm text-red-600 mb-3">{actionError}</p>}
 
           <div className="flex gap-2">
             <button
               onClick={() => setConfirming(true)}
-              disabled={processing || (selected.available_routers?.length > 1 && !routerId) || selected.available_routers?.length === 0}
+              disabled={processing || (selected.available_routers?.length > 1 && !routerId) || selected.available_routers?.length === 0 || (routerId && !hasAvailablePaymentMethod)}
               className="bg-red-600 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-red-700 disabled:opacity-50"
             >
               Buy Now
@@ -180,8 +196,8 @@ export default function BuyInternet() {
             )}
             <div className="pt-3 border-t border-slate-100">
               <p className="text-sm font-medium text-slate-700 mb-2">Choose payment method</p>
-              <div className={`grid gap-2 ${paymentMethods.momo && paymentMethods.paystack ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                {paymentMethods.momo && (
+              <div className={`grid gap-2 ${availablePaymentMethods.momo && availablePaymentMethods.paystack ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                {availablePaymentMethods.momo && (
                 <button type="button" onClick={() => setPaymentMethod('momo')} className={`rounded-md border p-3 text-left ${paymentMethod === 'momo' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200'}`}>
                   <span className="block text-sm font-semibold text-slate-900">Mobile Money</span>
                   <span className="block text-xs text-slate-500 mt-1">No checkout charge</span>
@@ -192,7 +208,7 @@ export default function BuyInternet() {
                   )}
                 </button>
                 )}
-                {paymentMethods.paystack && (
+                {availablePaymentMethods.paystack && (
                 <button type="button" onClick={() => setPaymentMethod('paystack')} className={`rounded-md border p-3 text-left ${paymentMethod === 'paystack' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200'}`}>
                   <span className="block text-sm font-semibold text-slate-900">Paystack</span>
                   <span className="block text-xs text-slate-500 mt-1">Card or MoMo · 2% charge</span>
@@ -228,7 +244,7 @@ export default function BuyInternet() {
           <div className="flex gap-2">
             <button
               onClick={handleBuy}
-              disabled={processing}
+              disabled={processing || !hasAvailablePaymentMethod}
               className="flex-1 bg-amber-500 text-slate-950 rounded-md py-2.5 text-sm font-semibold hover:bg-amber-600 disabled:opacity-50"
             >
               {processing ? 'Please wait…' : 'Confirm & Buy'}

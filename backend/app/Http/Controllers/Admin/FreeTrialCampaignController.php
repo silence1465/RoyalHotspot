@@ -3,8 +3,11 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\FreeTrialCampaign;
+use App\Models\Purchase;
 use App\Models\RouterPackageProfile;
+use App\Services\PurchaseService;
 use Illuminate\Http\Request;
 
 class FreeTrialCampaignController extends Controller
@@ -22,16 +25,52 @@ class FreeTrialCampaignController extends Controller
         return response()->json($campaign->load(['package', 'router']), 201);
     }
 
-    public function update(Request $request, FreeTrialCampaign $campaign)
+    public function update(Request $request, FreeTrialCampaign $campaign, PurchaseService $purchaseService)
     {
-        $campaign->update($this->validated($request));
-        return $campaign->fresh()->load(['package', 'router']);
+        $data = $this->validated($request);
+        $wasActive = $campaign->is_active;
+        $campaign->update($data);
+        $revoked = $wasActive && array_key_exists('is_active', $data) && ! $data['is_active']
+            ? $this->revokeActiveClaims($request, $campaign, $purchaseService)
+            : 0;
+
+        return response()->json([
+            'campaign' => $campaign->fresh()->load(['package', 'router']),
+            'revoked_claims' => $revoked,
+        ]);
     }
 
-    public function destroy(FreeTrialCampaign $campaign)
+    public function destroy(Request $request, FreeTrialCampaign $campaign, PurchaseService $purchaseService)
     {
         $campaign->update(['is_active' => false]);
-        return response()->json(['message' => 'Campaign disabled.']);
+        $revoked = $this->revokeActiveClaims($request, $campaign, $purchaseService);
+
+        return response()->json([
+            'message' => "Campaign disabled. {$revoked} active free-trial claim(s) revoked.",
+            'revoked_claims' => $revoked,
+        ]);
+    }
+
+    private function revokeActiveClaims(
+        Request $request,
+        FreeTrialCampaign $campaign,
+        PurchaseService $purchaseService
+    ): int {
+        $claims = Purchase::where('free_trial_campaign_id', $campaign->id)
+            ->active()
+            ->with(['customer', 'router', 'voucher'])
+            ->get();
+
+        foreach ($claims as $claim) {
+            $purchaseService->expirePurchase($claim);
+        }
+
+        ActivityLog::record('free_trial.campaign_revoked', json_encode([
+            'campaign_id' => $campaign->id,
+            'revoked_claims' => $claims->count(),
+        ], JSON_UNESCAPED_SLASHES), ['user_id' => $request->user()?->id]);
+
+        return $claims->count();
     }
 
     private function validated(Request $request): array

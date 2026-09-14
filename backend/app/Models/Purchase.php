@@ -16,6 +16,12 @@ class Purchase extends Model
         'starts_at', 'voucher_id', 'verified_at', 'verification_method',
         'verified_by', 'momo_transaction_id', 'expires_at', 'admin_notes',
         'guest_phone', 'guest_code',
+        'usage_policy', 'fup_period', 'base_speed_limit', 'data_allowance_bytes',
+        'tier1_threshold_percent', 'tier2_threshold_percent',
+        'tier1_speed_percent', 'tier2_speed_percent', 'tier3_speed_percent',
+        'cycle_bytes_used', 'current_fup_tier', 'applied_speed_limit',
+        'usage_policy_applied_at',
+        'policy_access_status',
     ];
 
     protected $casts = [
@@ -26,6 +32,15 @@ class Purchase extends Model
         'starts_at' => 'datetime',
         'verified_at' => 'datetime',
         'expires_at' => 'datetime',
+        'data_allowance_bytes' => 'integer',
+        'cycle_bytes_used' => 'integer',
+        'current_fup_tier' => 'integer',
+        'tier1_threshold_percent' => 'integer',
+        'tier2_threshold_percent' => 'integer',
+        'tier1_speed_percent' => 'integer',
+        'tier2_speed_percent' => 'integer',
+        'tier3_speed_percent' => 'integer',
+        'usage_policy_applied_at' => 'datetime',
     ];
 
     // ── Relationships ───────────────────────────────────────────────
@@ -136,7 +151,8 @@ class Purchase extends Model
 
     public function isActive(): bool
     {
-        return in_array($this->status, ['active', 'voucher_assigned', 'completed']);
+        return in_array($this->status, ['active', 'voucher_assigned', 'completed'])
+            && $this->policy_access_status !== 'data_exhausted';
     }
 
     public function isQueued(): bool
@@ -153,7 +169,8 @@ class Purchase extends Model
 
     public function scopeActive($query)
     {
-        return $query->whereIn('status', ['active', 'voucher_assigned', 'completed']);
+        return $query->whereIn('status', ['active', 'voucher_assigned', 'completed'])
+            ->where('policy_access_status', '!=', 'data_exhausted');
     }
 
     public function scopeExpiring($query)

@@ -13,6 +13,7 @@ class Router extends Model
     protected $fillable = [
         'name', 'location', 'router_ip', 'wireguard_ip',
         'api_username', 'api_password', 'api_port', 'api_ssl', 'status', 'connection_mode',
+        'momo_enabled', 'paystack_enabled',
         'provisioning_api_username', 'provisioning_api_password', 'address_pool',
         'hotspot_login_host',
     ];
@@ -29,6 +30,8 @@ class Router extends Model
         'api_password' => 'encrypted',
         'provisioning_api_password' => 'encrypted',
         'api_ssl' => 'boolean',
+        'momo_enabled' => 'boolean',
+        'paystack_enabled' => 'boolean',
     ];
 
     public function purchases()

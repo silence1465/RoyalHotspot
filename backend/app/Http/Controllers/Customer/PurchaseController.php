@@ -41,13 +41,24 @@ class PurchaseController extends Controller
      */
     public function store(Request $request)
     {
-        $validated = $request->validate(['payment_method' => ['required', 'in:paystack,momo']]);
+        $validated = $request->validate([
+            'payment_method' => ['required', 'in:paystack,momo'],
+            'router_id' => ['nullable', 'integer', 'exists:routers,id'],
+        ]);
         $paymentMethod = $validated['payment_method'];
 
         if (! filter_var(SystemSetting::get("{$paymentMethod}_enabled", '1'), FILTER_VALIDATE_BOOLEAN)) {
             return response()->json([
                 'message' => ucfirst($paymentMethod) . ' payments are currently unavailable. Please choose another payment method.',
                 'errors' => ['payment_method' => ['This payment method is currently disabled.']],
+            ], 422);
+        }
+
+        $router = isset($validated['router_id']) ? Router::find($validated['router_id']) : null;
+        if ($router && ! $router->{"{$paymentMethod}_enabled"}) {
+            return response()->json([
+                'message' => ucfirst($paymentMethod).' payments are not available at this location. Please choose another payment method.',
+                'errors' => ['payment_method' => ['This payment method is disabled for the selected router.']],
             ], 422);
         }
 

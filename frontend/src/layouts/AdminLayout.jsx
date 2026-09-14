@@ -14,7 +14,8 @@ export default function AdminLayout() {
         .get('/admin/notifications/summary')
         .then(({ data }) =>
           setBadges({
-            '/admin/purchases': data.badges.purchases,
+            ...(data.navigation_counts || {}),
+            '/admin/purchases': Math.max(data.navigation_counts?.['/admin/purchases'] || 0, data.badges.purchases || 0),
             '/admin/complaints': data.badges.complaints,
           })
         )

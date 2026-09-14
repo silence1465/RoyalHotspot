@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\HotspotUser;
 use App\Models\Purchase;
 use App\Services\MikrotikService;
+use App\Services\FupService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -121,6 +122,20 @@ class ActivateHotspotUserJob implements ShouldQueue
                 'disabled' => false,
             ]);
         }
+
+        $configuredUser = HotspotUser::where('customer_id', $purchase->customer_id)
+            ->where('router_id', $router->id)
+            ->first();
+        if ($configuredUser?->mikrotik_user_id && in_array($purchase->usage_policy, ['fup', 'data_cap'], true)) {
+            $limit = $purchase->usage_policy === 'data_cap' ? (int) $purchase->data_allowance_bytes : null;
+            $rate = app(FupService::class)->scaledRateLimit($purchase->base_speed_limit, 100);
+            $policyResult = $mikrotik->configureUserUsagePolicy($configuredUser->mikrotik_user_id, $rate, $limit);
+            if (! $policyResult['success']) {
+                throw new \RuntimeException('MikroTik usage policy configuration failed: '.($policyResult['error'] ?? 'unknown'));
+            }
+            $purchase->update(['applied_speed_limit' => $rate, 'usage_policy_applied_at' => now()]);
+            $configuredUser->update(['last_bytes_in' => 0, 'last_bytes_out' => 0]);
+        }
     }
 
     /**
@@ -142,6 +157,23 @@ class ActivateHotspotUserJob implements ShouldQueue
 
         if (! $result['success']) {
             throw new \RuntimeException('MikroTik guest user creation failed: ' . ($result['error'] ?? 'unknown'));
+        }
+
+        if ($purchase->usage_policy === 'data_cap') {
+            $userId = $result['data']['after']['ret']
+                ?? $result['data']['ret']
+                ?? $result['data']['.id']
+                ?? null;
+            if ($userId) {
+                $policyResult = $mikrotik->configureUserUsagePolicy(
+                    $userId,
+                    $purchase->base_speed_limit,
+                    (int) $purchase->data_allowance_bytes
+                );
+                if (! $policyResult['success']) {
+                    throw new \RuntimeException('MikroTik guest data cap failed: '.($policyResult['error'] ?? 'unknown'));
+                }
+            }
         }
 
         $purchase->update(['guest_code' => $code]);

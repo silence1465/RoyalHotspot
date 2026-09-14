@@ -29,6 +29,8 @@ class MikrotikService
             'port' => (int) ($this->router->api_port ?: 8728),
             'ssl' => (bool) $this->router->api_ssl,
             'timeout' => (int) env('MIKROTIK_CONNECTION_TIMEOUT', 5),
+            'socket_timeout' => (int) env('MIKROTIK_SOCKET_TIMEOUT', 30),
+            'throw_timeout_exception' => PHP_VERSION_ID < 80400,
         ]);
     }
 
@@ -44,6 +46,8 @@ class MikrotikService
             'port' => (int) ($this->router->api_port ?: 8728),
             'ssl' => (bool) $this->router->api_ssl,
             'timeout' => (int) env('MIKROTIK_CONNECTION_TIMEOUT', 5),
+            'socket_timeout' => (int) env('MIKROTIK_SOCKET_TIMEOUT', 30),
+            'throw_timeout_exception' => PHP_VERSION_ID < 80400,
         ]);
     }
 
@@ -165,6 +169,271 @@ class MikrotikService
             }
         );
     }
+
+    public function getHotspotHosts(): array
+    {
+        return $this->run('get-hotspot-hosts', fn (Client $client) =>
+            $client->query(new Query('/ip/hotspot/host/print'))->read()
+        );
+    }
+
+    public function getHotspotIpBindings(): array
+    {
+        return $this->run('get-hotspot-ip-bindings', fn (Client $client) =>
+            $client->query(new Query('/ip/hotspot/ip-binding/print'))->read()
+        );
+    }
+
+    public function getInterfaces(): array
+    {
+        return $this->run('get-interfaces', fn (Client $client) =>
+            $client->query(new Query('/interface/print'))->read()
+        );
+    }
+
+    public function getInterfaceTraffic(): array
+    {
+        return $this->run('get-interface-traffic', function (Client $client) {
+            $interfaces = $client->query(new Query('/interface/print'))->read();
+            $traffic = [];
+            foreach ($interfaces as $interface) {
+                if (empty($interface['name']) || ($interface['running'] ?? 'false') !== 'true') continue;
+                $sample = $client->query((new Query('/interface/monitor-traffic'))
+                    ->equal('interface', $interface['name'])->equal('once', ''))->read();
+                if (isset($sample[0])) $traffic[] = array_merge(['name' => $interface['name']], $sample[0]);
+            }
+            return $traffic;
+        });
+    }
+
+    public function updateHotspotUser(string $id, array $values): array
+    {
+        return $this->run('update-hotspot-user', function (Client $client) use ($id, $values) {
+            $query = (new Query('/ip/hotspot/user/set'))->equal('.id', $id);
+            foreach ($values as $name => $value) {
+                if ($value !== null) $query->equal($name, (string) $value);
+            }
+            return $client->query($query)->read();
+        });
+    }
+
+    /** Apply a per-user rate and reconnect active sessions so it takes effect now. */
+    public function setUserRateAndReconnect(string $id, string $username, string $rateLimit): array
+    {
+        return $this->run('set-user-fup-rate', function (Client $client) use ($id, $username, $rateLimit) {
+            $client->query(
+                (new Query('/ip/hotspot/user/set'))
+                    ->equal('.id', $id)
+                    ->equal('rate-limit', $rateLimit)
+            )->read();
+
+            $sessions = $client->query(
+                (new Query('/ip/hotspot/active/print'))->where('user', $username)
+            )->read();
+            foreach ($sessions as $session) {
+                if (! empty($session['.id'])) {
+                    $client->query(
+                        (new Query('/ip/hotspot/active/remove'))->equal('.id', $session['.id'])
+                    )->read();
+                }
+            }
+
+            return ['username' => $username, 'rate_limit' => $rateLimit, 'reconnected' => count($sessions)];
+        });
+    }
+
+    /** Reset prior-cycle counters and configure RouterOS's native hard cap. */
+    public function configureUserUsagePolicy(string $id, ?string $rateLimit, ?int $limitBytesTotal): array
+    {
+        return $this->run('configure-user-usage-policy', function (Client $client) use ($id, $rateLimit, $limitBytesTotal) {
+            $client->query(
+                (new Query('/ip/hotspot/user/reset-counters'))->equal('.id', $id)
+            )->read();
+
+            $query = (new Query('/ip/hotspot/user/set'))
+                ->equal('.id', $id)
+                ->equal('limit-bytes-total', (string) ($limitBytesTotal ?? 0));
+            if ($rateLimit) {
+                $query->equal('rate-limit', $rateLimit);
+            }
+
+            return $client->query($query)->read();
+        });
+    }
+
+    public function createHotspotIpBinding(array $values): array
+    {
+        return $this->run('create-hotspot-ip-binding', function (Client $client) use ($values) {
+            $query = new Query('/ip/hotspot/ip-binding/add');
+            foreach ($values as $name => $value) {
+                if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            }
+            return $client->query($query)->read();
+        });
+    }
+
+    public function updateHotspotIpBinding(string $id, array $values): array
+    {
+        return $this->run('update-hotspot-ip-binding', function (Client $client) use ($id, $values) {
+            $query = (new Query('/ip/hotspot/ip-binding/set'))->equal('.id', $id);
+            foreach ($values as $name => $value) {
+                if ($value !== null) $query->equal($name, (string) $value);
+            }
+            return $client->query($query)->read();
+        });
+    }
+
+    public function removeHotspotIpBinding(string $id): array
+    {
+        return $this->run('remove-hotspot-ip-binding', fn (Client $client) =>
+            $client->query((new Query('/ip/hotspot/ip-binding/remove'))->equal('.id', $id))->read()
+        );
+    }
+
+    public function getHotspotProfiles(): array
+    {
+        return $this->run('get-hotspot-profiles', fn (Client $client) => $client->query(new Query('/ip/hotspot/user/profile/print'))->read());
+    }
+
+    public function updateHotspotProfile(string $id, array $values): array
+    {
+        return $this->setValues('update-hotspot-profile', '/ip/hotspot/user/profile/set', $id, $values);
+    }
+
+    public function removeHotspotProfile(string $id): array
+    {
+        return $this->removeById('remove-hotspot-profile', '/ip/hotspot/user/profile/remove', $id);
+    }
+
+    public function getDhcpServers(): array
+    {
+        return $this->run('get-dhcp-servers', fn (Client $client) => $client->query(new Query('/ip/dhcp-server/print'))->read());
+    }
+
+    public function getDhcpLeases(): array
+    {
+        return $this->run('get-dhcp-leases', fn (Client $client) => $client->query(new Query('/ip/dhcp-server/lease/print'))->read());
+    }
+
+    public function makeDhcpLeaseStatic(string $id): array
+    {
+        return $this->run('make-dhcp-lease-static', fn (Client $client) => $client->query((new Query('/ip/dhcp-server/lease/make-static'))->equal('.id', $id))->read());
+    }
+
+    public function removeDhcpLease(string $id): array
+    {
+        return $this->removeById('remove-dhcp-lease', '/ip/dhcp-server/lease/remove', $id);
+    }
+
+    public function updateDhcpLease(string $id, array $values): array
+    {
+        return $this->setValues('update-dhcp-lease', '/ip/dhcp-server/lease/set', $id, $values);
+    }
+
+    public function getSimpleQueues(): array
+    {
+        return $this->run('get-simple-queues', fn (Client $client) => $client->query(new Query('/queue/simple/print'))->read());
+    }
+
+    public function createSimpleQueue(array $values): array
+    {
+        return $this->addValues('create-simple-queue', '/queue/simple/add', $values);
+    }
+
+    public function updateSimpleQueue(string $id, array $values): array
+    {
+        return $this->setValues('update-simple-queue', '/queue/simple/set', $id, $values);
+    }
+
+    public function removeSimpleQueue(string $id): array
+    {
+        return $this->removeById('remove-simple-queue', '/queue/simple/remove', $id);
+    }
+
+    public function getRouterLogs(): array
+    {
+        return $this->run('get-router-logs', function (Client $client) {
+            $query = (new Query('/log/print'))
+                ->equal('.proplist', '.id,time,topics,message');
+
+            return array_slice($client->query($query)->read(), -100);
+        });
+    }
+
+    public function getHotspotServers(): array { return $this->printPath('get-hotspot-servers', '/ip/hotspot/print'); }
+    public function createHotspotServer(array $values): array { return $this->addValues('create-hotspot-server', '/ip/hotspot/add', $values); }
+    public function updateHotspotServer(string $id, array $values): array { return $this->setValues('update-hotspot-server', '/ip/hotspot/set', $id, $values); }
+    public function removeHotspotServer(string $id): array { return $this->removeById('remove-hotspot-server', '/ip/hotspot/remove', $id); }
+
+    public function getIpPools(): array { return $this->printPath('get-ip-pools', '/ip/pool/print'); }
+    public function createIpPool(array $values): array { return $this->addValues('create-ip-pool', '/ip/pool/add', $values); }
+    public function updateIpPool(string $id, array $values): array { return $this->setValues('update-ip-pool', '/ip/pool/set', $id, $values); }
+    public function removeIpPool(string $id): array { return $this->removeById('remove-ip-pool', '/ip/pool/remove', $id); }
+
+    public function getDhcpNetworks(): array { return $this->printPath('get-dhcp-networks', '/ip/dhcp-server/network/print'); }
+    public function createDhcpNetwork(array $values): array { return $this->addValues('create-dhcp-network', '/ip/dhcp-server/network/add', $values); }
+    public function updateDhcpNetwork(string $id, array $values): array { return $this->setValues('update-dhcp-network', '/ip/dhcp-server/network/set', $id, $values); }
+    public function removeDhcpNetwork(string $id): array { return $this->removeById('remove-dhcp-network', '/ip/dhcp-server/network/remove', $id); }
+
+    public function getHotspotCookies(): array { return $this->printPath('get-hotspot-cookies', '/ip/hotspot/cookie/print'); }
+    public function removeHotspotCookie(string $id): array { return $this->removeById('remove-hotspot-cookie', '/ip/hotspot/cookie/remove', $id); }
+    public function getArpEntries(): array { return $this->printPath('get-arp-entries', '/ip/arp/print'); }
+    public function getIpAddresses(): array { return $this->printPath('get-ip-addresses', '/ip/address/print'); }
+    public function getDnsCache(): array { return $this->printPath('get-dns-cache', '/ip/dns/cache/print'); }
+    public function getDnsSettings(): array { return $this->printPath('get-dns-settings', '/ip/dns/print'); }
+    public function getSystemIdentity(): array { return $this->printPath('get-system-identity', '/system/identity/print'); }
+    public function getSystemClock(): array { return $this->printPath('get-system-clock', '/system/clock/print'); }
+    public function getSystemHealth(): array { return $this->printPath('get-system-health', '/system/health/print'); }
+    public function getNtpClient(): array { return $this->printPath('get-ntp-client', '/system/ntp/client/print'); }
+    public function getPackageUpdateStatus(): array { return $this->printPath('get-package-update-status', '/system/package/update/print'); }
+    public function getWirelessClients(): array { return $this->printPath('get-wireless-clients', '/interface/wireless/registration-table/print'); }
+
+    public function ping(string $address): array
+    {
+        return $this->run('ping', fn (Client $client) => $client->query((new Query('/ping'))->equal('address', $address)->equal('count', '4'))->read());
+    }
+
+    public function traceroute(string $address): array
+    {
+        return $this->run('traceroute', fn (Client $client) => $client->query((new Query('/tool/traceroute'))->equal('address', $address)->equal('count', '1'))->read());
+    }
+
+    /** Execute a controller-approved, read-only RouterOS command. */
+    public function executeReadOnlyTerminal(string $command): array
+    {
+        $parts = preg_split('/\s+/', trim($command));
+        $menu = array_shift($parts);
+        $verb = array_shift($parts);
+        $path = $verb === 'print' ? rtrim($menu, '/').'/print' : $menu;
+        if ($verb !== 'print' && $verb !== null) array_unshift($parts, $verb);
+
+        return $this->runProvisioning('terminal-read-only', function (Client $client) use ($path, $parts) {
+            $query = new Query($path);
+            foreach ($parts as $part) {
+                [$name, $value] = array_pad(explode('=', $part, 2), 2, null);
+                if ($value !== null) $query->equal($name, $value);
+            }
+            return $client->query($query)->read();
+        });
+    }
+
+    public function getBridges(): array { return $this->provisioningPrint('get-bridges', '/interface/bridge/print'); }
+    public function createBridge(array $values): array { return $this->provisioningAdd('create-bridge', '/interface/bridge/add', $values); }
+    public function updateBridge(string $id, array $values): array { return $this->provisioningSet('update-bridge', '/interface/bridge/set', $id, $values); }
+    public function removeBridge(string $id): array { return $this->provisioningRemove('remove-bridge', '/interface/bridge/remove', $id); }
+    public function getBridgePorts(): array
+    {
+        return $this->runProvisioning('get-bridge-ports', function (Client $client) {
+            $query = (new Query('/interface/bridge/port/print'))
+                ->equal('.proplist', '.id,interface,bridge,pvid,path-cost,priority,edge,hw,hw-offload,role,dynamic,disabled');
+
+            return $client->query($query)->read();
+        });
+    }
+    public function createBridgePort(array $values): array { return $this->provisioningAdd('create-bridge-port', '/interface/bridge/port/add', $values); }
+    public function updateBridgePort(string $id, array $values): array { return $this->provisioningSet('update-bridge-port', '/interface/bridge/port/set', $id, $values); }
+    public function removeBridgePort(string $id): array { return $this->provisioningRemove('remove-bridge-port', '/interface/bridge/port/remove', $id); }
+    public function getBridgeHosts(): array { return $this->provisioningPrint('get-bridge-hosts', '/interface/bridge/host/print'); }
 
     /**
      * Recover and enable an existing RouterOS account when its internal ID
@@ -415,6 +684,144 @@ class MikrotikService
                 return $client->query($query)->read();
             }
         );
+    }
+
+    public function getAddressLists(): array
+    {
+        return $this->runProvisioning('get-address-lists', fn (Client $client) =>
+            $client->query(new Query('/ip/firewall/address-list/print'))->read()
+        );
+    }
+
+    public function getWalledGarden(): array
+    {
+        return $this->runProvisioning('get-walled-garden', fn (Client $client) => $client->query(new Query('/ip/hotspot/walled-garden/print'))->read());
+    }
+
+    public function createWalledGardenEntry(array $values): array
+    {
+        return $this->runProvisioning('create-walled-garden-entry', function (Client $client) use ($values) {
+            $query = new Query('/ip/hotspot/walled-garden/add');
+            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    public function updateWalledGardenEntry(string $id, array $values): array
+    {
+        return $this->runProvisioning('update-walled-garden-entry', function (Client $client) use ($id, $values) {
+            $query = (new Query('/ip/hotspot/walled-garden/set'))->equal('.id', $id);
+            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    public function removeWalledGardenEntry(string $id): array
+    {
+        return $this->runProvisioning('remove-walled-garden-entry', fn (Client $client) => $client->query((new Query('/ip/hotspot/walled-garden/remove'))->equal('.id', $id))->read());
+    }
+
+    public function createAddressListEntry(array $values): array
+    {
+        return $this->runProvisioning('create-address-list-entry', function (Client $client) use ($values) {
+            $query = new Query('/ip/firewall/address-list/add');
+            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    public function removeAddressListEntry(string $id): array
+    {
+        return $this->runProvisioning('remove-address-list-entry', fn (Client $client) =>
+            $client->query((new Query('/ip/firewall/address-list/remove'))->equal('.id', $id))->read()
+        );
+    }
+
+    public function updateAddressListEntry(string $id, array $values): array
+    {
+        return $this->runProvisioning('update-address-list-entry', function (Client $client) use ($id, $values) {
+            $query = (new Query('/ip/firewall/address-list/set'))->equal('.id', $id);
+            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    public function getBackupFiles(): array
+    {
+        return $this->runProvisioning('get-backup-files', fn (Client $client) =>
+            $client->query((new Query('/file/print'))->where('type', 'backup'))->read()
+        );
+    }
+
+    public function createBackup(string $name, string $password): array
+    {
+        return $this->runProvisioning('create-backup', fn (Client $client) =>
+            $client->query((new Query('/system/backup/save'))
+                ->equal('name', $name)->equal('password', $password)->equal('dont-encrypt', 'no'))->read()
+        );
+    }
+
+    public function removeBackupFile(string $id): array
+    {
+        return $this->runProvisioning('remove-backup-file', fn (Client $client) =>
+            $client->query((new Query('/file/remove'))->equal('.id', $id))->read()
+        );
+    }
+
+    private function addValues(string $action, string $path, array $values): array
+    {
+        return $this->run($action, function (Client $client) use ($path, $values) {
+            $query = new Query($path);
+            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    private function printPath(string $action, string $path): array
+    {
+        return $this->run($action, fn (Client $client) => $client->query(new Query($path))->read());
+    }
+
+    private function provisioningPrint(string $action, string $path): array
+    {
+        return $this->runProvisioning($action, fn (Client $client) => $client->query(new Query($path))->read());
+    }
+
+    private function provisioningAdd(string $action, string $path, array $values): array
+    {
+        return $this->runProvisioning($action, function (Client $client) use ($path, $values) {
+            $query = new Query($path);
+            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    private function provisioningSet(string $action, string $path, string $id, array $values): array
+    {
+        return $this->runProvisioning($action, function (Client $client) use ($path, $id, $values) {
+            $query = (new Query($path))->equal('.id', $id);
+            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    private function provisioningRemove(string $action, string $path, string $id): array
+    {
+        return $this->runProvisioning($action, fn (Client $client) => $client->query((new Query($path))->equal('.id', $id))->read());
+    }
+
+    private function setValues(string $action, string $path, string $id, array $values): array
+    {
+        return $this->run($action, function (Client $client) use ($path, $id, $values) {
+            $query = (new Query($path))->equal('.id', $id);
+            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            return $client->query($query)->read();
+        });
+    }
+
+    private function removeById(string $action, string $path, string $id): array
+    {
+        return $this->run($action, fn (Client $client) => $client->query((new Query($path))->equal('.id', $id))->read());
     }
 
     /**

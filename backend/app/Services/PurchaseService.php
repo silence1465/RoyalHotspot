@@ -151,6 +151,7 @@ class PurchaseService
             }
 
             $isFixedTrial = $locked->payment_method === 'free_trial' && $locked->expires_at;
+            app(FupService::class)->snapshotPolicy($locked, $locked->package);
             $locked->update([
                 'status' => 'active',
                 // Live access is provisioned now, but its purchased time

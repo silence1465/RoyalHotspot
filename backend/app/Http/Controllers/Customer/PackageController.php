@@ -31,7 +31,7 @@ class PackageController extends Controller
     {
         $packages = InternetPackage::active()
                 ->with(['routerProfiles.router' => function ($query) {
-                    $query->select('id', 'name', 'location', 'status', 'connection_mode');
+                    $query->select('id', 'name', 'location', 'status', 'connection_mode', 'momo_enabled', 'paystack_enabled');
                 }])
                 ->orderBy('price')
                 ->get(['id', 'name', 'description', 'price', 'duration_value', 'duration_unit', 'momo_bonus_value', 'momo_bonus_unit', 'speed_limit', 'data_limit', 'sales_channel'])
@@ -47,7 +47,17 @@ class PackageController extends Controller
                         'momo_bonus_unit' => $package->momo_bonus_unit,
                         'speed_limit' => $package->speed_limit,
                         'data_limit' => $package->data_limit,
-                        'available_routers' => $package->routerProfiles->pluck('router')->filter()->values(),
+                        'available_routers' => $package->routerProfiles->pluck('router')->filter()->map(fn ($router) => [
+                            'id' => $router->id,
+                            'name' => $router->name,
+                            'location' => $router->location,
+                            'status' => $router->status,
+                            'connection_mode' => $router->connection_mode,
+                            'payment_methods' => [
+                                'momo' => $this->gatewayEnabled('momo') && $router->momo_enabled,
+                                'paystack' => $this->gatewayEnabled('paystack') && $router->paystack_enabled,
+                            ],
+                        ])->values(),
                     ];
                 });
 

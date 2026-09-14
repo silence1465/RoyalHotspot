@@ -62,6 +62,7 @@ return Application::configure(basePath: dirname(__DIR__))
             // Forwarder webhook, a machine actor that doesn't fit the
             // customer/admin Sanctum abilities at all.
             'sms-forwarder' => \App\Http\Middleware\VerifySmsForwarderToken::class,
+            'mikrotik-unlocked' => \App\Http\Middleware\RequireMikrotikAdminUnlock::class,
         ]);
 
         $middleware->throttleApi();
