@@ -2,8 +2,8 @@
 
 namespace App\Services;
 
-use App\Models\Router;
 use App\Models\MikrotikLog;
+use App\Models\Router;
 use RouterOS\Client;
 use RouterOS\Query;
 use Throwable;
@@ -137,6 +137,46 @@ class MikrotikService
     }
 
     /**
+     * Verify that a hotspot account exists with the configuration required
+     * by the application. A successful API transport is not sufficient proof
+     * that RouterOS accepted the preceding add/set command.
+     */
+    public function verifyHotspotUser(string $username, string $expectedProfile): array
+    {
+        return $this->run(
+            'verify-hotspot-user',
+            function (Client $client) use ($username, $expectedProfile) {
+                $users = $client->query(
+                    (new Query('/ip/hotspot/user/print'))->where('name', $username)
+                )->read();
+
+                $user = collect($users)->first(
+                    fn (array $candidate) => ($candidate['name'] ?? null) === $username
+                );
+
+                if (! $user || empty($user['.id'])) {
+                    throw new \RuntimeException("MikroTik hotspot user {$username} was not found after provisioning.");
+                }
+
+                if (($user['profile'] ?? null) !== $expectedProfile) {
+                    throw new \RuntimeException("MikroTik hotspot user {$username} was assigned an unexpected profile.");
+                }
+
+                if (filter_var($user['disabled'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+                    throw new \RuntimeException("MikroTik hotspot user {$username} is disabled after provisioning.");
+                }
+
+                return [
+                    'mikrotik_user_id' => $user['.id'],
+                    'username' => $user['name'],
+                    'profile' => $user['profile'],
+                    'disabled' => false,
+                ];
+            }
+        );
+    }
+
+    /**
      * Enable a hotspot user.
      */
     public function enableHotspotUser(string $mikrotikUserId): array
@@ -172,22 +212,19 @@ class MikrotikService
 
     public function getHotspotHosts(): array
     {
-        return $this->run('get-hotspot-hosts', fn (Client $client) =>
-            $client->query(new Query('/ip/hotspot/host/print'))->read()
+        return $this->run('get-hotspot-hosts', fn (Client $client) => $client->query(new Query('/ip/hotspot/host/print'))->read()
         );
     }
 
     public function getHotspotIpBindings(): array
     {
-        return $this->run('get-hotspot-ip-bindings', fn (Client $client) =>
-            $client->query(new Query('/ip/hotspot/ip-binding/print'))->read()
+        return $this->run('get-hotspot-ip-bindings', fn (Client $client) => $client->query(new Query('/ip/hotspot/ip-binding/print'))->read()
         );
     }
 
     public function getInterfaces(): array
     {
-        return $this->run('get-interfaces', fn (Client $client) =>
-            $client->query(new Query('/interface/print'))->read()
+        return $this->run('get-interfaces', fn (Client $client) => $client->query(new Query('/interface/print'))->read()
         );
     }
 
@@ -197,11 +234,16 @@ class MikrotikService
             $interfaces = $client->query(new Query('/interface/print'))->read();
             $traffic = [];
             foreach ($interfaces as $interface) {
-                if (empty($interface['name']) || ($interface['running'] ?? 'false') !== 'true') continue;
+                if (empty($interface['name']) || ($interface['running'] ?? 'false') !== 'true') {
+                    continue;
+                }
                 $sample = $client->query((new Query('/interface/monitor-traffic'))
                     ->equal('interface', $interface['name'])->equal('once', ''))->read();
-                if (isset($sample[0])) $traffic[] = array_merge(['name' => $interface['name']], $sample[0]);
+                if (isset($sample[0])) {
+                    $traffic[] = array_merge(['name' => $interface['name']], $sample[0]);
+                }
             }
+
             return $traffic;
         });
     }
@@ -211,8 +253,11 @@ class MikrotikService
         return $this->run('update-hotspot-user', function (Client $client) use ($id, $values) {
             $query = (new Query('/ip/hotspot/user/set'))->equal('.id', $id);
             foreach ($values as $name => $value) {
-                if ($value !== null) $query->equal($name, (string) $value);
+                if ($value !== null) {
+                    $query->equal($name, (string) $value);
+                }
             }
+
             return $client->query($query)->read();
         });
     }
@@ -266,8 +311,11 @@ class MikrotikService
         return $this->run('create-hotspot-ip-binding', function (Client $client) use ($values) {
             $query = new Query('/ip/hotspot/ip-binding/add');
             foreach ($values as $name => $value) {
-                if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+                if ($value !== null && $value !== '') {
+                    $query->equal($name, (string) $value);
+                }
             }
+
             return $client->query($query)->read();
         });
     }
@@ -277,16 +325,18 @@ class MikrotikService
         return $this->run('update-hotspot-ip-binding', function (Client $client) use ($id, $values) {
             $query = (new Query('/ip/hotspot/ip-binding/set'))->equal('.id', $id);
             foreach ($values as $name => $value) {
-                if ($value !== null) $query->equal($name, (string) $value);
+                if ($value !== null) {
+                    $query->equal($name, (string) $value);
+                }
             }
+
             return $client->query($query)->read();
         });
     }
 
     public function removeHotspotIpBinding(string $id): array
     {
-        return $this->run('remove-hotspot-ip-binding', fn (Client $client) =>
-            $client->query((new Query('/ip/hotspot/ip-binding/remove'))->equal('.id', $id))->read()
+        return $this->run('remove-hotspot-ip-binding', fn (Client $client) => $client->query((new Query('/ip/hotspot/ip-binding/remove'))->equal('.id', $id))->read()
         );
     }
 
@@ -360,33 +410,125 @@ class MikrotikService
         });
     }
 
-    public function getHotspotServers(): array { return $this->printPath('get-hotspot-servers', '/ip/hotspot/print'); }
-    public function createHotspotServer(array $values): array { return $this->addValues('create-hotspot-server', '/ip/hotspot/add', $values); }
-    public function updateHotspotServer(string $id, array $values): array { return $this->setValues('update-hotspot-server', '/ip/hotspot/set', $id, $values); }
-    public function removeHotspotServer(string $id): array { return $this->removeById('remove-hotspot-server', '/ip/hotspot/remove', $id); }
+    public function getHotspotServers(): array
+    {
+        return $this->printPath('get-hotspot-servers', '/ip/hotspot/print');
+    }
 
-    public function getIpPools(): array { return $this->printPath('get-ip-pools', '/ip/pool/print'); }
-    public function createIpPool(array $values): array { return $this->addValues('create-ip-pool', '/ip/pool/add', $values); }
-    public function updateIpPool(string $id, array $values): array { return $this->setValues('update-ip-pool', '/ip/pool/set', $id, $values); }
-    public function removeIpPool(string $id): array { return $this->removeById('remove-ip-pool', '/ip/pool/remove', $id); }
+    public function createHotspotServer(array $values): array
+    {
+        return $this->addValues('create-hotspot-server', '/ip/hotspot/add', $values);
+    }
 
-    public function getDhcpNetworks(): array { return $this->printPath('get-dhcp-networks', '/ip/dhcp-server/network/print'); }
-    public function createDhcpNetwork(array $values): array { return $this->addValues('create-dhcp-network', '/ip/dhcp-server/network/add', $values); }
-    public function updateDhcpNetwork(string $id, array $values): array { return $this->setValues('update-dhcp-network', '/ip/dhcp-server/network/set', $id, $values); }
-    public function removeDhcpNetwork(string $id): array { return $this->removeById('remove-dhcp-network', '/ip/dhcp-server/network/remove', $id); }
+    public function updateHotspotServer(string $id, array $values): array
+    {
+        return $this->setValues('update-hotspot-server', '/ip/hotspot/set', $id, $values);
+    }
 
-    public function getHotspotCookies(): array { return $this->printPath('get-hotspot-cookies', '/ip/hotspot/cookie/print'); }
-    public function removeHotspotCookie(string $id): array { return $this->removeById('remove-hotspot-cookie', '/ip/hotspot/cookie/remove', $id); }
-    public function getArpEntries(): array { return $this->printPath('get-arp-entries', '/ip/arp/print'); }
-    public function getIpAddresses(): array { return $this->printPath('get-ip-addresses', '/ip/address/print'); }
-    public function getDnsCache(): array { return $this->printPath('get-dns-cache', '/ip/dns/cache/print'); }
-    public function getDnsSettings(): array { return $this->printPath('get-dns-settings', '/ip/dns/print'); }
-    public function getSystemIdentity(): array { return $this->printPath('get-system-identity', '/system/identity/print'); }
-    public function getSystemClock(): array { return $this->printPath('get-system-clock', '/system/clock/print'); }
-    public function getSystemHealth(): array { return $this->printPath('get-system-health', '/system/health/print'); }
-    public function getNtpClient(): array { return $this->printPath('get-ntp-client', '/system/ntp/client/print'); }
-    public function getPackageUpdateStatus(): array { return $this->printPath('get-package-update-status', '/system/package/update/print'); }
-    public function getWirelessClients(): array { return $this->printPath('get-wireless-clients', '/interface/wireless/registration-table/print'); }
+    public function removeHotspotServer(string $id): array
+    {
+        return $this->removeById('remove-hotspot-server', '/ip/hotspot/remove', $id);
+    }
+
+    public function getIpPools(): array
+    {
+        return $this->printPath('get-ip-pools', '/ip/pool/print');
+    }
+
+    public function createIpPool(array $values): array
+    {
+        return $this->addValues('create-ip-pool', '/ip/pool/add', $values);
+    }
+
+    public function updateIpPool(string $id, array $values): array
+    {
+        return $this->setValues('update-ip-pool', '/ip/pool/set', $id, $values);
+    }
+
+    public function removeIpPool(string $id): array
+    {
+        return $this->removeById('remove-ip-pool', '/ip/pool/remove', $id);
+    }
+
+    public function getDhcpNetworks(): array
+    {
+        return $this->printPath('get-dhcp-networks', '/ip/dhcp-server/network/print');
+    }
+
+    public function createDhcpNetwork(array $values): array
+    {
+        return $this->addValues('create-dhcp-network', '/ip/dhcp-server/network/add', $values);
+    }
+
+    public function updateDhcpNetwork(string $id, array $values): array
+    {
+        return $this->setValues('update-dhcp-network', '/ip/dhcp-server/network/set', $id, $values);
+    }
+
+    public function removeDhcpNetwork(string $id): array
+    {
+        return $this->removeById('remove-dhcp-network', '/ip/dhcp-server/network/remove', $id);
+    }
+
+    public function getHotspotCookies(): array
+    {
+        return $this->printPath('get-hotspot-cookies', '/ip/hotspot/cookie/print');
+    }
+
+    public function removeHotspotCookie(string $id): array
+    {
+        return $this->removeById('remove-hotspot-cookie', '/ip/hotspot/cookie/remove', $id);
+    }
+
+    public function getArpEntries(): array
+    {
+        return $this->printPath('get-arp-entries', '/ip/arp/print');
+    }
+
+    public function getIpAddresses(): array
+    {
+        return $this->printPath('get-ip-addresses', '/ip/address/print');
+    }
+
+    public function getDnsCache(): array
+    {
+        return $this->printPath('get-dns-cache', '/ip/dns/cache/print');
+    }
+
+    public function getDnsSettings(): array
+    {
+        return $this->printPath('get-dns-settings', '/ip/dns/print');
+    }
+
+    public function getSystemIdentity(): array
+    {
+        return $this->printPath('get-system-identity', '/system/identity/print');
+    }
+
+    public function getSystemClock(): array
+    {
+        return $this->printPath('get-system-clock', '/system/clock/print');
+    }
+
+    public function getSystemHealth(): array
+    {
+        return $this->printPath('get-system-health', '/system/health/print');
+    }
+
+    public function getNtpClient(): array
+    {
+        return $this->printPath('get-ntp-client', '/system/ntp/client/print');
+    }
+
+    public function getPackageUpdateStatus(): array
+    {
+        return $this->printPath('get-package-update-status', '/system/package/update/print');
+    }
+
+    public function getWirelessClients(): array
+    {
+        return $this->printPath('get-wireless-clients', '/interface/wireless/registration-table/print');
+    }
 
     public function ping(string $address): array
     {
@@ -405,22 +547,43 @@ class MikrotikService
         $menu = array_shift($parts);
         $verb = array_shift($parts);
         $path = $verb === 'print' ? rtrim($menu, '/').'/print' : $menu;
-        if ($verb !== 'print' && $verb !== null) array_unshift($parts, $verb);
+        if ($verb !== 'print' && $verb !== null) {
+            array_unshift($parts, $verb);
+        }
 
         return $this->runProvisioning('terminal-read-only', function (Client $client) use ($path, $parts) {
             $query = new Query($path);
             foreach ($parts as $part) {
                 [$name, $value] = array_pad(explode('=', $part, 2), 2, null);
-                if ($value !== null) $query->equal($name, $value);
+                if ($value !== null) {
+                    $query->equal($name, $value);
+                }
             }
+
             return $client->query($query)->read();
         });
     }
 
-    public function getBridges(): array { return $this->provisioningPrint('get-bridges', '/interface/bridge/print'); }
-    public function createBridge(array $values): array { return $this->provisioningAdd('create-bridge', '/interface/bridge/add', $values); }
-    public function updateBridge(string $id, array $values): array { return $this->provisioningSet('update-bridge', '/interface/bridge/set', $id, $values); }
-    public function removeBridge(string $id): array { return $this->provisioningRemove('remove-bridge', '/interface/bridge/remove', $id); }
+    public function getBridges(): array
+    {
+        return $this->provisioningPrint('get-bridges', '/interface/bridge/print');
+    }
+
+    public function createBridge(array $values): array
+    {
+        return $this->provisioningAdd('create-bridge', '/interface/bridge/add', $values);
+    }
+
+    public function updateBridge(string $id, array $values): array
+    {
+        return $this->provisioningSet('update-bridge', '/interface/bridge/set', $id, $values);
+    }
+
+    public function removeBridge(string $id): array
+    {
+        return $this->provisioningRemove('remove-bridge', '/interface/bridge/remove', $id);
+    }
+
     public function getBridgePorts(): array
     {
         return $this->runProvisioning('get-bridge-ports', function (Client $client) {
@@ -430,10 +593,26 @@ class MikrotikService
             return $client->query($query)->read();
         });
     }
-    public function createBridgePort(array $values): array { return $this->provisioningAdd('create-bridge-port', '/interface/bridge/port/add', $values); }
-    public function updateBridgePort(string $id, array $values): array { return $this->provisioningSet('update-bridge-port', '/interface/bridge/port/set', $id, $values); }
-    public function removeBridgePort(string $id): array { return $this->provisioningRemove('remove-bridge-port', '/interface/bridge/port/remove', $id); }
-    public function getBridgeHosts(): array { return $this->provisioningPrint('get-bridge-hosts', '/interface/bridge/host/print'); }
+
+    public function createBridgePort(array $values): array
+    {
+        return $this->provisioningAdd('create-bridge-port', '/interface/bridge/port/add', $values);
+    }
+
+    public function updateBridgePort(string $id, array $values): array
+    {
+        return $this->provisioningSet('update-bridge-port', '/interface/bridge/port/set', $id, $values);
+    }
+
+    public function removeBridgePort(string $id): array
+    {
+        return $this->provisioningRemove('remove-bridge-port', '/interface/bridge/port/remove', $id);
+    }
+
+    public function getBridgeHosts(): array
+    {
+        return $this->provisioningPrint('get-bridge-hosts', '/interface/bridge/host/print');
+    }
 
     /**
      * Recover and enable an existing RouterOS account when its internal ID
@@ -546,8 +725,7 @@ class MikrotikService
         ?string $rateLimit = null,
         ?string $addressPool = null,
         int $sharedUsers = 1
-    ): array
-    {
+    ): array {
         return $this->run(
             'ensure-hotspot-user-profile',
             function (Client $client) use ($name, $rateLimit, $addressPool, $sharedUsers) {
@@ -557,7 +735,7 @@ class MikrotikService
 
                 $existing = $client->query($checkQuery)->read();
 
-                if (!empty($existing)) {
+                if (! empty($existing)) {
                     $query = (new Query('/ip/hotspot/user/profile/set'))
                         ->equal('.id', $existing[0]['.id']);
 
@@ -652,7 +830,7 @@ class MikrotikService
 
                 $existing = $client->query($checkQuery)->read();
 
-                if (!empty($existing)) {
+                if (! empty($existing)) {
                     return [
                         'message' => 'Walled garden entry already exists.',
                         'existing' => true,
@@ -688,8 +866,7 @@ class MikrotikService
 
     public function getAddressLists(): array
     {
-        return $this->runProvisioning('get-address-lists', fn (Client $client) =>
-            $client->query(new Query('/ip/firewall/address-list/print'))->read()
+        return $this->runProvisioning('get-address-lists', fn (Client $client) => $client->query(new Query('/ip/firewall/address-list/print'))->read()
         );
     }
 
@@ -702,7 +879,12 @@ class MikrotikService
     {
         return $this->runProvisioning('create-walled-garden-entry', function (Client $client) use ($values) {
             $query = new Query('/ip/hotspot/walled-garden/add');
-            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null && $value !== '') {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
@@ -711,7 +893,12 @@ class MikrotikService
     {
         return $this->runProvisioning('update-walled-garden-entry', function (Client $client) use ($id, $values) {
             $query = (new Query('/ip/hotspot/walled-garden/set'))->equal('.id', $id);
-            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null) {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
@@ -725,15 +912,19 @@ class MikrotikService
     {
         return $this->runProvisioning('create-address-list-entry', function (Client $client) use ($values) {
             $query = new Query('/ip/firewall/address-list/add');
-            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null && $value !== '') {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
 
     public function removeAddressListEntry(string $id): array
     {
-        return $this->runProvisioning('remove-address-list-entry', fn (Client $client) =>
-            $client->query((new Query('/ip/firewall/address-list/remove'))->equal('.id', $id))->read()
+        return $this->runProvisioning('remove-address-list-entry', fn (Client $client) => $client->query((new Query('/ip/firewall/address-list/remove'))->equal('.id', $id))->read()
         );
     }
 
@@ -741,30 +932,32 @@ class MikrotikService
     {
         return $this->runProvisioning('update-address-list-entry', function (Client $client) use ($id, $values) {
             $query = (new Query('/ip/firewall/address-list/set'))->equal('.id', $id);
-            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null) {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
 
     public function getBackupFiles(): array
     {
-        return $this->runProvisioning('get-backup-files', fn (Client $client) =>
-            $client->query((new Query('/file/print'))->where('type', 'backup'))->read()
+        return $this->runProvisioning('get-backup-files', fn (Client $client) => $client->query((new Query('/file/print'))->where('type', 'backup'))->read()
         );
     }
 
     public function createBackup(string $name, string $password): array
     {
-        return $this->runProvisioning('create-backup', fn (Client $client) =>
-            $client->query((new Query('/system/backup/save'))
-                ->equal('name', $name)->equal('password', $password)->equal('dont-encrypt', 'no'))->read()
+        return $this->runProvisioning('create-backup', fn (Client $client) => $client->query((new Query('/system/backup/save'))
+            ->equal('name', $name)->equal('password', $password)->equal('dont-encrypt', 'no'))->read()
         );
     }
 
     public function removeBackupFile(string $id): array
     {
-        return $this->runProvisioning('remove-backup-file', fn (Client $client) =>
-            $client->query((new Query('/file/remove'))->equal('.id', $id))->read()
+        return $this->runProvisioning('remove-backup-file', fn (Client $client) => $client->query((new Query('/file/remove'))->equal('.id', $id))->read()
         );
     }
 
@@ -772,7 +965,12 @@ class MikrotikService
     {
         return $this->run($action, function (Client $client) use ($path, $values) {
             $query = new Query($path);
-            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null && $value !== '') {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
@@ -791,7 +989,12 @@ class MikrotikService
     {
         return $this->runProvisioning($action, function (Client $client) use ($path, $values) {
             $query = new Query($path);
-            foreach ($values as $name => $value) if ($value !== null && $value !== '') $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null && $value !== '') {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
@@ -800,7 +1003,12 @@ class MikrotikService
     {
         return $this->runProvisioning($action, function (Client $client) use ($path, $id, $values) {
             $query = (new Query($path))->equal('.id', $id);
-            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null) {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
@@ -814,7 +1022,12 @@ class MikrotikService
     {
         return $this->run($action, function (Client $client) use ($path, $id, $values) {
             $query = (new Query($path))->equal('.id', $id);
-            foreach ($values as $name => $value) if ($value !== null) $query->equal($name, (string) $value);
+            foreach ($values as $name => $value) {
+                if ($value !== null) {
+                    $query->equal($name, (string) $value);
+                }
+            }
+
             return $client->query($query)->read();
         });
     }
@@ -879,6 +1092,10 @@ class MikrotikService
             $client = $this->connectProvisioning();
 
             $result = $callback($client);
+
+            if ($error = $this->routerOsCommandError($result)) {
+                throw new \RuntimeException($error);
+            }
 
             $this->logAction(
                 $action,
@@ -947,6 +1164,10 @@ class MikrotikService
 
             $result = $callback($client);
 
+            if ($error = $this->routerOsCommandError($result)) {
+                throw new \RuntimeException($error);
+            }
+
             $this->logAction(
                 $action,
                 $requestPayload,
@@ -977,6 +1198,36 @@ class MikrotikService
                 'error' => $e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * RouterOS can return a syntactically valid response containing a trap or
+     * an `after.message` command error. The client library does not always
+     * throw for these responses, so normalize them into operation failures.
+     */
+    protected function routerOsCommandError(mixed $result): ?string
+    {
+        if (! is_array($result)) {
+            return null;
+        }
+
+        foreach ($result as $key => $value) {
+            if (in_array((string) $key, ['!trap', '!fatal'], true)) {
+                return is_array($value)
+                    ? (string) ($value['message'] ?? json_encode($value))
+                    : (string) $value;
+            }
+
+            if ($key === 'after' && is_array($value) && ! empty($value['message'])) {
+                return (string) $value['message'];
+            }
+
+            if (is_array($value) && ($error = $this->routerOsCommandError($value))) {
+                return $error;
+            }
+        }
+
+        return null;
     }
 
     /**

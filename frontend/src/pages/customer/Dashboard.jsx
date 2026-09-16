@@ -4,6 +4,7 @@ import { Eye, EyeOff, Gift, Wifi } from 'lucide-react';
 import api from '../../services/api';
 import StatusBadge from '../../components/StatusBadge';
 import CountdownTimer from '../../components/CountdownTimer';
+import { canPrepareConnection, connectionControl } from './connectionState';
 
 const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'currency', currency: c }).format(n || 0);
 
@@ -11,12 +12,50 @@ export default function CustomerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const autoConnectStarted = useRef(false);
   const provisioningAttempts = useRef(0);
+  const pendingSessionOnLoad = useRef(
+    searchParams.get('confirm_session') || sessionStorage.getItem('hotspot_pending_session'),
+  );
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [hasFreeInternet, setHasFreeInternet] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [connection, setConnection] = useState({ status: '', message: '' });
+  const [currentConnectionChecked, setCurrentConnectionChecked] = useState(
+    !sessionStorage.getItem('portal_router_id')
+      || Boolean(pendingSessionOnLoad.current),
+  );
+
+  useEffect(() => {
+    const routerId = sessionStorage.getItem('portal_router_id');
+    const pendingConfirmation = pendingSessionOnLoad.current;
+    if (!routerId || pendingConfirmation) return undefined;
+
+    let cancelled = false;
+    setConnection({ status: 'checking', message: 'Checking your WiFi connection...' });
+
+    api.get('/customer/hotspot/sessions/current', { params: { router_id: Number(routerId) } })
+      .then(({ data: current }) => {
+        if (cancelled) return;
+        if (current.connected === true) {
+          setConnection({ status: 'active', message: 'Connected. Your internet is active.' });
+        } else if (current.status === 'unknown') {
+          setConnection({ status: 'unknown', message: 'Your WiFi connection could not be checked right now.' });
+        } else {
+          setConnection({ status: '', message: '' });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setConnection({ status: 'unknown', message: 'Your WiFi connection could not be checked right now.' });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCurrentConnectionChecked(true);
+      });
+
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -50,7 +89,7 @@ export default function CustomerDashboard() {
   const prepareSecureConnection = useCallback(async () => {
     const loginUrl = sessionStorage.getItem('guest_login_url');
     const routerId = sessionStorage.getItem('portal_router_id');
-    if (!loginUrl || !routerId) return;
+    if (!loginUrl || !routerId || !canPrepareConnection(connection.status, currentConnectionChecked)) return;
 
     setConnection({ status: 'connecting', message: 'Preparing your secure hotspot connection...' });
     try {
@@ -60,6 +99,11 @@ export default function CustomerDashboard() {
         mac_address: sessionStorage.getItem('guest_mac') || null,
         ip_address: sessionStorage.getItem('guest_ip') || null,
       });
+      if (prepared.connected === true || prepared.status === 'active') {
+        sessionStorage.removeItem('hotspot_pending_session');
+        setConnection({ status: 'active', message: 'Connected. Your internet is active.' });
+        return;
+      }
       sessionStorage.setItem('hotspot_pending_session', prepared.session_id);
 
       const form = document.createElement('form');
@@ -85,7 +129,7 @@ export default function CustomerDashboard() {
         message: err.response?.data?.message || Object.values(err.response?.data?.errors || {})[0]?.[0] || 'Could not prepare the hotspot connection.',
       });
     }
-  }, []);
+  }, [connection.status, currentConnectionChecked]);
 
   const handleConnectToWifi = useCallback(async () => {
     return prepareSecureConnection();
@@ -148,7 +192,7 @@ export default function CustomerDashboard() {
         }
         if (result.status === 'failed') {
           sessionStorage.removeItem('hotspot_pending_session');
-          setConnection({ status: 'failed', message: result.failure_message || 'The router could not confirm the connection.' });
+          setConnection({ status: 'failed', message: result.failure_message || 'WiFi connection failed. Please try again.' });
           return;
         }
       } catch (err) {
@@ -159,14 +203,19 @@ export default function CustomerDashboard() {
           return;
         }
       }
-      if (!cancelled && attempts < 15) window.setTimeout(confirm, 2000);
+      if (!cancelled && attempts < 15) {
+        window.setTimeout(confirm, 2000);
+      } else if (!cancelled) {
+        sessionStorage.removeItem('hotspot_pending_session');
+        setConnection({ status: 'failed', message: 'WiFi connection failed. Please try again.' });
+      }
     };
     confirm();
     return () => { cancelled = true; };
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
-    if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current) {
+    if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current || !currentConnectionChecked || connection.status === 'active' || connection.status === 'unknown') {
       return undefined;
     }
 
@@ -197,10 +246,10 @@ export default function CustomerDashboard() {
     }, 2000);
 
     return () => window.clearTimeout(timer);
-  }, [data, searchParams]);
+  }, [connection.status, currentConnectionChecked, data, searchParams]);
 
   useEffect(() => {
-    if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current) {
+    if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current || !canPrepareConnection(connection.status, currentConnectionChecked)) {
       return;
     }
 
@@ -217,7 +266,7 @@ export default function CustomerDashboard() {
     provisioningAttempts.current = 0;
     window.history.replaceState({}, '', '/dashboard');
     handleConnectToWifi(credentials, purchase.id);
-  }, [data, handleConnectToWifi, searchParams]);
+  }, [connection.status, currentConnectionChecked, data, handleConnectToWifi, searchParams]);
 
   if (loading) return <p className="text-sm text-slate-400">Loading…</p>;
   if (error) {
@@ -231,6 +280,9 @@ export default function CustomerDashboard() {
   // password, same convention as every other voucher/guest code in this
   // system.
   const credentials = hotspot || (voucher ? { username: voucher.code, password: voucher.code } : null);
+  const hasPortalContext = Boolean(sessionStorage.getItem('guest_login_url'));
+  const accountReady = Boolean(credentials) && purchase?.status !== 'pending_activation';
+  const connectionUi = connectionControl(connection.status, hasPortalContext, accountReady);
 
   return (
     <div className="space-y-6">
@@ -328,20 +380,31 @@ export default function CustomerDashboard() {
 
           {purchase.status === 'pending_activation' && (
             <p className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-              Your payment went through, but connecting you to the network is taking a little
-              longer than usual. This should resolve automatically — contact support if it
-              doesn't clear in a few minutes.
+              Your hotspot account could not be activated. Please try again or contact support.
+            </p>
+          )}
+
+          {purchase.status !== 'pending_activation' && purchase.fulfillment_type === 'live' && !credentials && (
+            <p className="mt-4 text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2">
+              Activating your hotspot account...
             </p>
           )}
 
           {credentials && (
             <div className="mt-4 pt-4 border-t border-slate-100">
-              {sessionStorage.getItem('guest_login_url') && (
+              {connectionUi.kind === 'connected' && (
+                <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md py-2.5 px-4 text-sm font-medium mb-4">
+                  {connectionUi.label}
+                </div>
+              )}
+
+              {(connectionUi.kind === 'connect' || connectionUi.kind === 'connecting') && (
                 <button
                   onClick={() => handleConnectToWifi(credentials, purchase.id)}
-                  className="w-full bg-indigo-600 text-white rounded-md py-2.5 text-sm font-medium hover:bg-indigo-700 mb-4"
+                  disabled={connectionUi.disabled}
+                  className="w-full bg-indigo-600 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white rounded-md py-2.5 text-sm font-medium hover:bg-indigo-700 mb-4"
                 >
-                  Connect to WiFi
+                  {connectionUi.label}
                 </button>
               )}
 

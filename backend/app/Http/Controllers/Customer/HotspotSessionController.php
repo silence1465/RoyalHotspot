@@ -11,6 +11,17 @@ use Illuminate\Http\Request;
 
 class HotspotSessionController extends Controller
 {
+    public function current(Request $request, HotspotSessionService $service)
+    {
+        $validated = $request->validate([
+            'router_id' => ['required', 'integer', 'exists:routers,id'],
+        ]);
+
+        return response()->json(
+            $service->current($request->user(), (int) $validated['router_id'])
+        );
+    }
+
     public function prepare(PrepareHotspotSessionRequest $request, HotspotSessionService $service)
     {
         try {

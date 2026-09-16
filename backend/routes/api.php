@@ -201,6 +201,8 @@ Route::prefix('v1')->group(function () {
         Route::put('/profile', [\App\Http\Controllers\Customer\ProfileController::class, 'update']);
         Route::post('/hotspot/sessions/prepare', [\App\Http\Controllers\Customer\HotspotSessionController::class, 'prepare'])
             ->middleware('throttle:hotspot-connect');
+        Route::get('/hotspot/sessions/current', [\App\Http\Controllers\Customer\HotspotSessionController::class, 'current'])
+            ->middleware('throttle:hotspot-status');
         Route::get('/hotspot/sessions/{session}', [\App\Http\Controllers\Customer\HotspotSessionController::class, 'status'])
             ->middleware('throttle:hotspot-status');
 

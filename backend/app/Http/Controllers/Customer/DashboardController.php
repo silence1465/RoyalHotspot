@@ -27,11 +27,12 @@ class DashboardController extends Controller
                 ->where('router_id', $purchase->router_id)
                 ->first();
 
-            if ($hotspotUser) {
+            if ($hotspotUser && $hotspotUser->mikrotik_user_id && ! $hotspotUser->disabled
+                && $purchase->status !== 'pending_activation') {
                 $hotspotCredentials = [
                     'username' => $hotspotUser->username,
                     'password' => $hotspotUser->makeVisible('password')->password,
-                    'disabled' => $hotspotUser->disabled,
+                    'disabled' => false,
                 ];
             }
         }

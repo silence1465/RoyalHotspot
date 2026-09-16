@@ -13,6 +13,8 @@ use Illuminate\Validation\ValidationException;
 
 class HotspotSessionService
 {
+    public function __construct(protected MikrotikServiceFactory $mikrotikFactory) {}
+
     public function prepare(
         Customer $customer,
         int $routerId,
@@ -34,6 +36,19 @@ class HotspotSessionService
         $lock = Cache::lock("hotspot-connect:{$customer->id}:{$router->id}", 20);
 
         return $lock->block(5, function () use ($customer, $router, $loginUrl, $macAddress, $ipAddress) {
+            $current = $this->current($customer, $router->id);
+            if ($current['connected']) {
+                return [
+                    'session_id' => $current['session']['session_id'],
+                    'status' => 'active',
+                    'connected' => true,
+                ];
+            }
+
+            if ($current['status'] === 'unknown') {
+                throw new \RuntimeException('The hotspot is temporarily unavailable. Your existing connection was not changed.');
+            }
+
             $purchase = Purchase::where('customer_id', $customer->id)
                 ->where('router_id', $router->id)
                 ->active()
@@ -51,10 +66,10 @@ class HotspotSessionService
 
             [$username, $password] = $this->credentialsFor($purchase);
 
-            $mikrotik = new MikrotikService($router);
+            $mikrotik = $this->mikrotikFactory->make($router);
             $activeResult = $mikrotik->getActiveUsers();
             if (! $activeResult['success']) {
-                throw new \RuntimeException('Could not check the hotspot right now: ' . ($activeResult['error'] ?? 'router unavailable'));
+                throw new \RuntimeException('Could not check the hotspot right now: '.($activeResult['error'] ?? 'router unavailable'));
             }
 
             $existingSessions = collect($activeResult['data'])
@@ -68,7 +83,7 @@ class HotspotSessionService
 
                 $removeResult = $mikrotik->removeActiveSession($sessionId);
                 if (! $removeResult['success']) {
-                    throw new \RuntimeException('Could not replace the previous hotspot session: ' . ($removeResult['error'] ?? 'unknown error'));
+                    throw new \RuntimeException('Could not replace the previous hotspot session: '.($removeResult['error'] ?? 'unknown error'));
                 }
             }
 
@@ -102,8 +117,64 @@ class HotspotSessionService
                 'login_url' => $loginUrl,
                 'username' => $username,
                 'password' => $password,
+                'connected' => false,
             ];
         });
+    }
+
+    /**
+     * Return the authenticated customer's current connection on one router.
+     * A temporary RouterOS failure is deliberately reported as unknown so a
+     * known active session is not destroyed or replaced on a false negative.
+     */
+    public function current(Customer $customer, int $routerId): array
+    {
+        $session = HotspotSession::where('customer_id', $customer->id)
+            ->where('router_id', $routerId)
+            ->where('status', 'active')
+            ->with('router')
+            ->latest('last_seen_at')
+            ->latest('id')
+            ->first();
+
+        if (! $session) {
+            return ['connected' => false, 'status' => 'disconnected', 'session' => null];
+        }
+
+        $result = $this->mikrotikFactory->make($session->router)->getActiveUsers();
+        if (! $result['success']) {
+            return [
+                'connected' => null,
+                'status' => 'unknown',
+                'message' => 'The router could not be checked right now.',
+                'session' => $this->sessionPayload($session),
+            ];
+        }
+
+        $match = collect($result['data'])->first(
+            fn (array $active) => $this->matchesSession($session, $active)
+        );
+
+        if (! $match) {
+            $session->update([
+                'status' => 'disconnected',
+                'disconnect_reason' => 'router_session_ended',
+                'ended_at' => now(),
+            ]);
+
+            return ['connected' => false, 'status' => 'disconnected', 'session' => null];
+        }
+
+        $session->update([
+            'mikrotik_session_id' => $match['.id'] ?? $session->mikrotik_session_id,
+            'last_seen_at' => now(),
+        ]);
+
+        return [
+            'connected' => true,
+            'status' => 'active',
+            'session' => $this->sessionPayload($session->fresh()),
+        ];
     }
 
     public function confirm(Customer $customer, HotspotSession $session): HotspotSession
@@ -120,28 +191,20 @@ class HotspotSessionService
             $session->update([
                 'status' => 'failed',
                 'ended_at' => now(),
-                'failure_message' => 'RouterOS did not confirm the login within one minute.',
+                'failure_message' => 'WiFi connection failed. Your hotspot account could not be authenticated. Please try again.',
             ]);
 
             return $session->fresh();
         }
 
-        $result = (new MikrotikService($session->router))->getActiveUsers();
+        $result = $this->mikrotikFactory->make($session->router)->getActiveUsers();
         if (! $result['success']) {
             return $session;
         }
 
-        $match = collect($result['data'])->first(function (array $active) use ($session) {
-            if (($active['user'] ?? null) !== $session->mikrotik_username) {
-                return false;
-            }
-
-            if ($session->mac_address && $this->normalizeMac($active['mac-address'] ?? null) !== $session->mac_address) {
-                return false;
-            }
-
-            return ! $session->ip_address || ($active['address'] ?? null) === $session->ip_address;
-        });
+        $match = collect($result['data'])->first(
+            fn (array $active) => $this->matchesSession($session, $active)
+        );
 
         if ($match) {
             $session->update([
@@ -173,7 +236,7 @@ class HotspotSessionService
             ->where('router_id', $purchase->router_id)
             ->first();
 
-        if (! $hotspotUser || $hotspotUser->disabled) {
+        if (! $hotspotUser || $hotspotUser->disabled || ! $hotspotUser->mikrotik_user_id) {
             throw ValidationException::withMessages(['subscription' => 'Your hotspot account is not ready yet. Please try again shortly.']);
         }
 
@@ -210,5 +273,30 @@ class HotspotSessionService
     protected function normalizeMac(?string $mac): ?string
     {
         return $mac ? strtoupper(str_replace('-', ':', trim($mac))) : null;
+    }
+
+    protected function matchesSession(HotspotSession $session, array $active): bool
+    {
+        if (($active['user'] ?? null) !== $session->mikrotik_username) {
+            return false;
+        }
+
+        if ($session->mac_address && $this->normalizeMac($active['mac-address'] ?? null) !== $session->mac_address) {
+            return false;
+        }
+
+        return ! $session->ip_address || ($active['address'] ?? null) === $session->ip_address;
+    }
+
+    protected function sessionPayload(HotspotSession $session): array
+    {
+        return [
+            'session_id' => $session->public_id,
+            'status' => $session->status,
+            'mikrotik_username' => $session->mikrotik_username,
+            'mikrotik_session_id' => $session->mikrotik_session_id,
+            'started_at' => $session->started_at,
+            'last_seen_at' => $session->last_seen_at,
+        ];
     }
 }

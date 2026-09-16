@@ -4,8 +4,9 @@ namespace App\Jobs;
 
 use App\Models\HotspotUser;
 use App\Models\Purchase;
-use App\Services\MikrotikService;
 use App\Services\FupService;
+use App\Services\MikrotikService;
+use App\Services\MikrotikServiceFactory;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -26,13 +27,12 @@ class ActivateHotspotUserJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
+
     public array $backoff = [10, 30, 90];
 
-    public function __construct(public int $purchaseId)
-    {
-    }
+    public function __construct(public int $purchaseId) {}
 
-    public function handle(): void
+    public function handle(MikrotikServiceFactory $mikrotikFactory): void
     {
         $purchase = Purchase::with(['customer', 'package', 'router'])->findOrFail($this->purchaseId);
 
@@ -46,14 +46,29 @@ class ActivateHotspotUserJob implements ShouldQueue
             return;
         }
 
-        if ($purchase->isGuest()) {
-            $this->activateGuest($purchase);
-            return;
+        $router = $purchase->router;
+        $mikrotik = $mikrotikFactory->make($router);
+        $profileName = $router->profileNameFor($purchase->package);
+
+        if (! $profileName) {
+            throw new \RuntimeException('No MikroTik profile is mapped to this package on the selected router.');
         }
 
-        $router = $purchase->router;
-        $mikrotik = new MikrotikService($router);
-        $profileName = $router->profileNameFor($purchase->package);
+        $profileResult = $mikrotik->ensureHotspotUserProfile(
+            $profileName,
+            $purchase->package->speed_limit,
+            $router->address_pool
+        );
+
+        if (! $profileResult['success']) {
+            throw new \RuntimeException('MikroTik profile provisioning failed: '.($profileResult['error'] ?? 'unknown'));
+        }
+
+        if ($purchase->isGuest()) {
+            $this->activateGuest($purchase, $mikrotik, $profileName);
+
+            return;
+        }
 
         $hotspotUser = HotspotUser::where('customer_id', $purchase->customer_id)
             ->where('router_id', $router->id)
@@ -64,15 +79,18 @@ class ActivateHotspotUserJob implements ShouldQueue
                 $result = $mikrotik->enableHotspotUser($hotspotUser->mikrotik_user_id);
 
                 if (! $result['success']) {
-                    throw new \RuntimeException('MikroTik enable failed: ' . ($result['error'] ?? 'unknown'));
+                    throw new \RuntimeException('MikroTik enable failed: '.($result['error'] ?? 'unknown'));
                 }
 
                 $profileResult = $mikrotik->changeUserProfile($hotspotUser->mikrotik_user_id, $profileName);
                 if (! $profileResult['success']) {
-                    throw new \RuntimeException('MikroTik profile update failed: ' . ($profileResult['error'] ?? 'unknown'));
+                    throw new \RuntimeException('MikroTik profile update failed: '.($profileResult['error'] ?? 'unknown'));
                 }
 
+                $verifiedUserId = $this->verifiedUserId($mikrotik, $hotspotUser->username, $profileName);
+
                 $hotspotUser->update([
+                    'mikrotik_user_id' => $verifiedUserId,
                     'disabled' => false,
                     'profile' => $profileName,
                 ]);
@@ -95,11 +113,13 @@ class ActivateHotspotUserJob implements ShouldQueue
 
                     $profileResult = $mikrotik->changeUserProfile($recoveredUserId, $profileName);
                     if (! $profileResult['success']) {
-                        throw new \RuntimeException('MikroTik profile update failed: ' . ($profileResult['error'] ?? 'unknown'));
+                        throw new \RuntimeException('MikroTik profile update failed: '.($profileResult['error'] ?? 'unknown'));
                     }
 
+                    $verifiedUserId = $this->verifiedUserId($mikrotik, $hotspotUser->username, $profileName);
+
                     $hotspotUser->update([
-                        'mikrotik_user_id' => $recoveredUserId,
+                        'mikrotik_user_id' => $verifiedUserId,
                         'disabled' => false,
                         'profile' => $profileName,
                     ]);
@@ -119,34 +139,14 @@ class ActivateHotspotUserJob implements ShouldQueue
                     );
 
                     if (! $createResult['success']) {
-                        throw new \RuntimeException('MikroTik user recreation failed: ' . ($createResult['error'] ?? 'unknown'));
+                        throw new \RuntimeException('MikroTik user recreation failed: '.($createResult['error'] ?? 'unknown'));
                     }
 
-                    $mikrotikUserId = $createResult['data']['after']['ret']
-                        ?? $createResult['data']['ret']
-                        ?? $createResult['data']['.id']
-                        ?? null;
-
-                    /*
-                     * Some RouterOS API responses don't return the created .id.
-                     * Recover it by username when necessary.
-                     */
-                    if (! $mikrotikUserId) {
-                        $recoverResult = $mikrotik->enableHotspotUserByUsername($hotspotUser->username);
-
-                        if (! $recoverResult['success']) {
-                            throw new \RuntimeException(
-                                'MikroTik user was created but its ID could not be recovered: ' .
-                                ($recoverResult['error'] ?? 'unknown')
-                            );
-                        }
-
-                        $mikrotikUserId = $recoverResult['data']['mikrotik_user_id'] ?? null;
-                    }
-
-                    if (! $mikrotikUserId) {
-                        throw new \RuntimeException('MikroTik user was created but returned no user ID.');
-                    }
+                    $mikrotikUserId = $this->verifiedUserId(
+                        $mikrotik,
+                        $hotspotUser->username,
+                        $profileName
+                    );
 
                     $hotspotUser->update([
                         'mikrotik_user_id' => $mikrotikUserId,
@@ -162,16 +162,15 @@ class ActivateHotspotUserJob implements ShouldQueue
             $result = $mikrotik->createHotspotUser($username, $password, $profileName);
 
             if (! $result['success']) {
-                throw new \RuntimeException('MikroTik user creation failed: ' . ($result['error'] ?? 'unknown'));
+                throw new \RuntimeException('MikroTik user creation failed: '.($result['error'] ?? 'unknown'));
             }
+
+            $mikrotikUserId = $this->verifiedUserId($mikrotik, $username, $profileName);
 
             HotspotUser::create([
                 'customer_id' => $purchase->customer_id,
                 'router_id' => $router->id,
-                'mikrotik_user_id' => $result['data']['after']['ret']
-                    ?? $result['data']['ret']
-                    ?? $result['data']['.id']
-                    ?? null,
+                'mikrotik_user_id' => $mikrotikUserId,
                 'username' => $username,
                 'password' => $password,
                 'profile' => $profileName,
@@ -201,18 +200,14 @@ class ActivateHotspotUserJob implements ShouldQueue
      * itself (stored on the purchase) is the only record a guest can
      * recover later via phone-number lookup.
      */
-    protected function activateGuest(Purchase $purchase): void
+    protected function activateGuest(Purchase $purchase, MikrotikService $mikrotik, string $profileName): void
     {
-        $router = $purchase->router;
-        $mikrotik = new MikrotikService($router);
-        $profileName = $router->profileNameFor($purchase->package);
-
         $code = Purchase::generateGuestCode();
 
         $result = $mikrotik->createHotspotUser($code, $code, $profileName);
 
         if (! $result['success']) {
-            throw new \RuntimeException('MikroTik guest user creation failed: ' . ($result['error'] ?? 'unknown'));
+            throw new \RuntimeException('MikroTik guest user creation failed: '.($result['error'] ?? 'unknown'));
         }
 
         if ($purchase->usage_policy === 'data_cap') {
@@ -233,6 +228,27 @@ class ActivateHotspotUserJob implements ShouldQueue
         }
 
         $purchase->update(['guest_code' => $code]);
+    }
+
+    protected function verifiedUserId(
+        MikrotikService $mikrotik,
+        string $username,
+        string $profileName
+    ): string {
+        $verification = $mikrotik->verifyHotspotUser($username, $profileName);
+
+        if (! $verification['success']) {
+            throw new \RuntimeException(
+                'MikroTik user verification failed: '.($verification['error'] ?? 'unknown')
+            );
+        }
+
+        $userId = $verification['data']['mikrotik_user_id'] ?? null;
+        if (! $userId) {
+            throw new \RuntimeException('MikroTik user verification returned no user ID.');
+        }
+
+        return $userId;
     }
 
     public function failed(\Throwable $exception): void
