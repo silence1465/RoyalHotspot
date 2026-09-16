@@ -77,27 +77,83 @@ class ActivateHotspotUserJob implements ShouldQueue
                     'profile' => $profileName,
                 ]);
             } else {
+                /*
+                 * Local HotspotUser exists but we do not have its RouterOS ID.
+                 *
+                 * First try to recover an existing RouterOS user by username.
+                 * If RouterOS no longer has the account, recreate it using the
+                 * existing Laravel username/password instead of generating a new
+                 * credential.
+                 */
                 $result = $mikrotik->enableHotspotUserByUsername($hotspotUser->username);
 
-                if (! $result['success']) {
-                    throw new \RuntimeException('MikroTik enable failed: ' . ($result['error'] ?? 'unknown'));
-                }
+                if ($result['success']) {
+                    $recoveredUserId = $result['data']['mikrotik_user_id'] ?? null;
+                    if (! $recoveredUserId) {
+                        throw new \RuntimeException('MikroTik user ID recovery returned no ID.');
+                    }
 
-                $recoveredUserId = $result['data']['mikrotik_user_id'] ?? null;
-                if (! $recoveredUserId) {
-                    throw new \RuntimeException('MikroTik user ID recovery returned no ID.');
-                }
+                    $profileResult = $mikrotik->changeUserProfile($recoveredUserId, $profileName);
+                    if (! $profileResult['success']) {
+                        throw new \RuntimeException('MikroTik profile update failed: ' . ($profileResult['error'] ?? 'unknown'));
+                    }
 
-                $profileResult = $mikrotik->changeUserProfile($recoveredUserId, $profileName);
-                if (! $profileResult['success']) {
-                    throw new \RuntimeException('MikroTik profile update failed: ' . ($profileResult['error'] ?? 'unknown'));
-                }
+                    $hotspotUser->update([
+                        'mikrotik_user_id' => $recoveredUserId,
+                        'disabled' => false,
+                        'profile' => $profileName,
+                    ]);
+                } else {
+                    /*
+                     * RouterOS does not have this user.
+                     * Recreate it from the credential already stored by Laravel.
+                     */
+                    $password = $hotspotUser
+                        ->makeVisible('password')
+                        ->password;
 
-                $hotspotUser->update([
-                    'mikrotik_user_id' => $recoveredUserId,
-                    'disabled' => false,
-                    'profile' => $profileName,
-                ]);
+                    $createResult = $mikrotik->createHotspotUser(
+                        $hotspotUser->username,
+                        $password,
+                        $profileName
+                    );
+
+                    if (! $createResult['success']) {
+                        throw new \RuntimeException('MikroTik user recreation failed: ' . ($createResult['error'] ?? 'unknown'));
+                    }
+
+                    $mikrotikUserId = $createResult['data']['after']['ret']
+                        ?? $createResult['data']['ret']
+                        ?? $createResult['data']['.id']
+                        ?? null;
+
+                    /*
+                     * Some RouterOS API responses don't return the created .id.
+                     * Recover it by username when necessary.
+                     */
+                    if (! $mikrotikUserId) {
+                        $recoverResult = $mikrotik->enableHotspotUserByUsername($hotspotUser->username);
+
+                        if (! $recoverResult['success']) {
+                            throw new \RuntimeException(
+                                'MikroTik user was created but its ID could not be recovered: ' .
+                                ($recoverResult['error'] ?? 'unknown')
+                            );
+                        }
+
+                        $mikrotikUserId = $recoverResult['data']['mikrotik_user_id'] ?? null;
+                    }
+
+                    if (! $mikrotikUserId) {
+                        throw new \RuntimeException('MikroTik user was created but returned no user ID.');
+                    }
+
+                    $hotspotUser->update([
+                        'mikrotik_user_id' => $mikrotikUserId,
+                        'disabled' => false,
+                        'profile' => $profileName,
+                    ]);
+                }
             }
         } else {
             $username = $purchase->customer->username;
