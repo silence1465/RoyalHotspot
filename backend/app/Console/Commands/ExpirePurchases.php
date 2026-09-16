@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Purchase;
 use App\Services\PurchaseService;
 use Illuminate\Console\Command;
+use Throwable;
 
 class ExpirePurchases extends Command
 {
@@ -30,8 +31,12 @@ class ExpirePurchases extends Command
         Purchase::expiring()
             ->chunkById(100, function ($purchases) use ($purchaseService, &$expiredActive) {
                 foreach ($purchases as $purchase) {
-                    $purchaseService->expirePurchase($purchase);
-                    $expiredActive++;
+                    try {
+                        $purchaseService->expirePurchase($purchase);
+                        $expiredActive++;
+                    } catch (Throwable $exception) {
+                        $this->warn("Purchase {$purchase->reference} could not be enforced and will be retried: {$exception->getMessage()}");
+                    }
                 }
             });
 

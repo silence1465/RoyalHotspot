@@ -13,7 +13,9 @@ use App\Models\RouterPackageProfile;
 use App\Services\HotspotSessionService;
 use App\Services\MikrotikService;
 use App\Services\MikrotikServiceFactory;
+use App\Services\PurchaseService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Mockery;
 use Tests\TestCase;
@@ -162,6 +164,120 @@ class HotspotConnectionFlowTest extends TestCase
         $this->assertSame('pending_activation', $purchase->fresh()->status);
     }
 
+    public function test_waiting_live_purchase_starts_once_and_valid_reconnect_keeps_its_timer(): void
+    {
+        [$customer, $router, $purchase] = $this->records('timer-user');
+        $purchase->package->update(['duration_value' => 1, 'duration_unit' => 'hours']);
+        $purchase->update(['starts_at' => null, 'expires_at' => null]);
+        $this->hotspotUser($customer, $router, 'timer-user');
+
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('getActiveUsers')->times(3)->andReturn(
+            ['success' => true, 'data' => []],
+            ['success' => true, 'data' => [['.id' => '*TIMER', 'user' => 'timer-user', 'mac-address' => 'AA:BB:CC:DD:EE:FF', 'address' => '10.0.0.8']]],
+            ['success' => true, 'data' => [['.id' => '*TIMER', 'user' => 'timer-user', 'mac-address' => 'AA:BB:CC:DD:EE:FF', 'address' => '10.0.0.8']]],
+        );
+        $factory = $this->factory($mikrotik);
+        $this->app->instance(MikrotikServiceFactory::class, $factory);
+        $service = new HotspotSessionService($factory);
+
+        $prepared = $service->prepare($customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8');
+        $startedAt = $purchase->fresh()->starts_at;
+        $expiresAt = $purchase->fresh()->expires_at;
+        $this->assertNotNull($startedAt);
+        $this->assertEquals(60, $startedAt->diffInMinutes($expiresAt));
+
+        $session = HotspotSession::where('public_id', $prepared['session_id'])->with('router')->firstOrFail();
+        $service->confirm($customer, $session);
+        $reconnect = $service->prepare($customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8');
+
+        $this->assertTrue($reconnect['connected']);
+        $this->assertTrue($purchase->fresh()->starts_at->equalTo($startedAt));
+        $this->assertTrue($purchase->fresh()->expires_at->equalTo($expiresAt));
+        $this->assertDatabaseCount('hotspot_sessions', 1);
+    }
+
+    public function test_waiting_purchase_is_not_authorized_by_an_existing_local_session(): void
+    {
+        [$customer, $router, $purchase] = $this->records('waiting-user');
+        $purchase->update(['starts_at' => null, 'expires_at' => null]);
+        $session = $this->activeSession($customer, $router, $purchase, 'waiting-user');
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('disconnectAndClearHotspotCookies')
+            ->once()->with('waiting-user', 'AA:BB:CC:DD:EE:FF')->andReturn(['success' => true]);
+
+        $result = (new HotspotSessionService($this->factory($mikrotik)))->current($customer, $router->id);
+
+        $this->assertFalse($result['connected']);
+        $this->assertSame('replaced', $session->fresh()->status);
+    }
+
+    public function test_expired_session_cannot_authorize_new_purchase_and_new_timer_starts(): void
+    {
+        [$customer, $router, $oldPurchase] = $this->records('replacement-user');
+        $oldPurchase->update(['status' => 'expired', 'starts_at' => now()->subHours(2), 'expires_at' => now()->subHour()]);
+        $oldSession = $this->activeSession($customer, $router, $oldPurchase, 'replacement-user');
+        $newPurchase = $oldPurchase->replicate(['reference', 'starts_at', 'expires_at', 'status']);
+        $newPurchase->fill(['reference' => 'RW-REPLACEMENT', 'status' => 'active', 'starts_at' => null, 'expires_at' => null, 'verified_at' => now()])->save();
+        $this->hotspotUser($customer, $router, 'replacement-user');
+
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('disconnectAndClearHotspotCookies')->once()->andReturn(['success' => true]);
+        $mikrotik->shouldReceive('getActiveUsers')->once()->andReturn(['success' => true, 'data' => []]);
+        $factory = $this->factory($mikrotik);
+        $this->app->instance(MikrotikServiceFactory::class, $factory);
+
+        $prepared = (new HotspotSessionService($factory))->prepare(
+            $customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8'
+        );
+
+        $this->assertFalse($prepared['connected']);
+        $this->assertSame('expired', $oldSession->fresh()->status);
+        $this->assertNotNull($newPurchase->fresh()->starts_at);
+        $this->assertDatabaseHas('hotspot_sessions', ['public_id' => $prepared['session_id'], 'purchase_id' => $newPurchase->id, 'status' => 'connecting']);
+    }
+
+    public function test_expiry_revokes_router_access_and_expires_matching_session(): void
+    {
+        [$customer, $router, $purchase] = $this->records('expiry-user');
+        $purchase->update(['expires_at' => now()->subMinute()]);
+        $session = $this->activeSession($customer, $router, $purchase, 'expiry-user');
+        $hotspotUser = $this->hotspotUser($customer, $router, 'expiry-user');
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('disableAndDisconnectHotspotUser')
+            ->once()->with('expiry-user', $hotspotUser->mikrotik_user_id)
+            ->andReturn(['success' => true, 'data' => ['disconnected_sessions' => 1, 'removed_cookies' => 1]]);
+
+        (new PurchaseService($this->factory($mikrotik)))->expirePurchase($purchase);
+
+        $this->assertSame('expired', $purchase->fresh()->status);
+        $this->assertSame('expired', $session->fresh()->status);
+        $this->assertTrue($hotspotUser->fresh()->disabled);
+    }
+
+    public function test_admin_grant_waits_for_first_connection_before_starting_timer(): void
+    {
+        Queue::fake();
+        [$customer, $router, $purchase] = $this->records('grant-user');
+        $purchase->update(['status' => 'verified', 'payment_method' => 'admin_grant', 'starts_at' => null, 'expires_at' => null]);
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $factory = $this->factory($mikrotik);
+        $service = new PurchaseService($factory);
+        $service->fulfill($purchase);
+        $this->assertNull($purchase->fresh()->starts_at);
+        $this->assertNull($purchase->fresh()->expires_at);
+
+        $this->hotspotUser($customer, $router, 'grant-user');
+        $mikrotik->shouldReceive('getActiveUsers')->once()->andReturn(['success' => true, 'data' => []]);
+        $this->app->instance(MikrotikServiceFactory::class, $factory);
+        (new HotspotSessionService($factory))->prepare(
+            $customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8'
+        );
+
+        $this->assertNotNull($purchase->fresh()->starts_at);
+        $this->assertNotNull($purchase->fresh()->expires_at);
+    }
+
     private function records(string $username): array
     {
         $customer = Customer::factory()->active()->create(['username' => $username]);
@@ -209,6 +325,19 @@ class HotspotConnectionFlowTest extends TestCase
             'status' => 'active',
             'started_at' => now()->subMinute(),
             'last_seen_at' => now()->subSecond(),
+        ]);
+    }
+
+    private function hotspotUser(Customer $customer, Router $router, string $username): HotspotUser
+    {
+        return HotspotUser::create([
+            'customer_id' => $customer->id,
+            'router_id' => $router->id,
+            'username' => $username,
+            'password' => 'hotspot-password',
+            'mikrotik_user_id' => '*USER',
+            'profile' => 'weekly',
+            'disabled' => false,
         ]);
     }
 

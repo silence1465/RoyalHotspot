@@ -36,7 +36,14 @@ class HotspotSessionService
         $lock = Cache::lock("hotspot-connect:{$customer->id}:{$router->id}", 20);
 
         return $lock->block(5, function () use ($customer, $router, $loginUrl, $macAddress, $ipAddress) {
-            $current = $this->current($customer, $router->id);
+            $purchase = $this->eligiblePurchase($customer, $router->id);
+            if (! $purchase) {
+                throw ValidationException::withMessages([
+                    'subscription' => 'You do not have an active internet package for this hotspot.',
+                ]);
+            }
+
+            $current = $this->currentForPurchase($customer, $router, $purchase);
             if ($current['connected']) {
                 return [
                     'session_id' => $current['session']['session_id'],
@@ -47,21 +54,6 @@ class HotspotSessionService
 
             if ($current['status'] === 'unknown') {
                 throw new \RuntimeException('The hotspot is temporarily unavailable. Your existing connection was not changed.');
-            }
-
-            $purchase = Purchase::where('customer_id', $customer->id)
-                ->where('router_id', $router->id)
-                ->active()
-                ->where(function ($query) {
-                    $query->whereNull('expires_at')->orWhere('expires_at', '>', now());
-                })
-                ->latest('verified_at')
-                ->first();
-
-            if (! $purchase) {
-                throw ValidationException::withMessages([
-                    'subscription' => 'You do not have an active internet package for this hotspot.',
-                ]);
             }
 
             [$username, $password] = $this->credentialsFor($purchase);
@@ -75,13 +67,8 @@ class HotspotSessionService
             $existingSessions = collect($activeResult['data'])
                 ->filter(fn (array $session) => ($session['user'] ?? null) === $username);
 
-            foreach ($existingSessions as $existing) {
-                $sessionId = $existing['.id'] ?? null;
-                if (! $sessionId) {
-                    continue;
-                }
-
-                $removeResult = $mikrotik->removeActiveSession($sessionId);
+            if ($existingSessions->contains(fn (array $existing) => ! empty($existing['.id']))) {
+                $removeResult = $mikrotik->disconnectAndClearHotspotCookies($username, $this->normalizeMac($macAddress));
                 if (! $removeResult['success']) {
                     throw new \RuntimeException('Could not replace the previous hotspot session: '.($removeResult['error'] ?? 'unknown error'));
                 }
@@ -129,15 +116,55 @@ class HotspotSessionService
      */
     public function current(Customer $customer, int $routerId): array
     {
+        $router = Router::whereKey($routerId)->where('connection_mode', 'live')->first();
+        if (! $router) {
+            return ['connected' => false, 'status' => 'disconnected', 'session' => null];
+        }
+
+        return $this->currentForPurchase($customer, $router, $this->eligiblePurchase($customer, $routerId));
+    }
+
+    protected function currentForPurchase(Customer $customer, Router $router, ?Purchase $purchase): array
+    {
         $session = HotspotSession::where('customer_id', $customer->id)
-            ->where('router_id', $routerId)
+            ->where('router_id', $router->id)
             ->where('status', 'active')
-            ->with('router')
+            ->with(['router', 'purchase'])
             ->latest('last_seen_at')
             ->latest('id')
             ->first();
 
         if (! $session) {
+            return ['connected' => false, 'status' => 'disconnected', 'session' => null];
+        }
+
+        $sessionPurchase = $session->purchase;
+        $legitimate = $purchase
+            && (int) $session->purchase_id === (int) $purchase->id
+            && $sessionPurchase
+            && $sessionPurchase->isActive()
+            && $sessionPurchase->starts_at !== null
+            && $sessionPurchase->expires_at !== null
+            && $sessionPurchase->expires_at->isFuture();
+
+        if (! $legitimate) {
+            $mikrotik = $this->mikrotikFactory->make($session->router);
+            $result = $mikrotik->disconnectAndClearHotspotCookies($session->mikrotik_username, $session->mac_address);
+            if (! $result['success']) {
+                return [
+                    'connected' => null,
+                    'status' => 'unknown',
+                    'message' => 'The stale hotspot connection could not be removed right now.',
+                    'session' => $this->sessionPayload($session),
+                ];
+            }
+
+            $session->update([
+                'status' => $sessionPurchase?->isExpiredByTime() ? 'expired' : 'replaced',
+                'disconnect_reason' => $sessionPurchase?->isExpiredByTime() ? 'purchase_expired' : 'purchase_replaced',
+                'ended_at' => now(),
+            ]);
+
             return ['connected' => false, 'status' => 'disconnected', 'session' => null];
         }
 
@@ -175,6 +202,33 @@ class HotspotSessionService
             'status' => 'active',
             'session' => $this->sessionPayload($session->fresh()),
         ];
+    }
+
+    protected function eligiblePurchase(Customer $customer, int $routerId): ?Purchase
+    {
+        return Purchase::where('customer_id', $customer->id)
+            ->where('router_id', $routerId)
+            ->active()
+            ->where(function ($query) {
+                $query->where(function ($started) {
+                    $started->whereNotNull('starts_at')
+                        ->whereNotNull('expires_at')
+                        ->where('expires_at', '>', now());
+                })->orWhere(function ($waiting) {
+                    $waiting->where('fulfillment_type', 'live')
+                        ->whereNull('starts_at')
+                        ->whereNull('expires_at');
+                })->orWhere(function ($voucher) {
+                    $voucher->where('fulfillment_type', 'voucher')
+                        ->where(function ($expiry) {
+                            $expiry->whereNull('expires_at')->orWhere('expires_at', '>', now());
+                        });
+                });
+            })
+            ->orderByRaw('CASE WHEN starts_at IS NOT NULL THEN 0 ELSE 1 END')
+            ->latest('verified_at')
+            ->latest('id')
+            ->first();
     }
 
     public function confirm(Customer $customer, HotspotSession $session): HotspotSession

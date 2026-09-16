@@ -5,8 +5,8 @@ namespace App\Services;
 use App\Jobs\ActivateHotspotUserJob;
 use App\Jobs\SendVoucherPurchaseEmailJob;
 use App\Models\ActivityLog;
-use App\Models\HotspotUser;
 use App\Models\HotspotSession;
+use App\Models\HotspotUser;
 use App\Models\Purchase;
 use App\Models\Voucher;
 use Illuminate\Support\Facades\DB;
@@ -29,6 +29,8 @@ use Illuminate\Support\Facades\DB;
  */
 class PurchaseService
 {
+    public function __construct(protected MikrotikServiceFactory $mikrotikFactory) {}
+
     public function verifyAndFulfill(
         Purchase $purchase,
         string $verificationMethod,
@@ -339,13 +341,17 @@ class PurchaseService
                     : $hotspotUser?->username;
 
                 if ($username) {
-                    $mikrotik = new MikrotikService($purchase->router);
+                    $mikrotik = $this->mikrotikFactory->make($purchase->router);
                     $result = $mikrotik->disableAndDisconnectHotspotUser(
                         $username,
                         $hotspotUser?->mikrotik_user_id
                     );
 
-                    if ($result['success'] && $hotspotUser) {
+                    if (! $result['success']) {
+                        throw new \RuntimeException('Could not revoke expired hotspot access: '.($result['error'] ?? 'unknown error'));
+                    }
+
+                    if ($hotspotUser) {
                         $hotspotUser->update(['disabled' => true]);
                     }
                 }
@@ -364,12 +370,17 @@ class PurchaseService
                 $voucher = $purchase->voucher;
 
                 if ($voucher && $voucher->mikrotik_user_id && $purchase->router_id) {
-                    $mikrotik = new MikrotikService($purchase->router);
-                    $result = $mikrotik->disableHotspotUser($voucher->mikrotik_user_id);
+                    $mikrotik = $this->mikrotikFactory->make($purchase->router);
+                    $result = $mikrotik->disableAndDisconnectHotspotUser(
+                        $voucher->code,
+                        $voucher->mikrotik_user_id
+                    );
 
-                    if ($result['success']) {
-                        $voucher->update(['status' => 'expired']);
+                    if (! $result['success']) {
+                        throw new \RuntimeException('Could not revoke expired voucher access: '.($result['error'] ?? 'unknown error'));
                     }
+
+                    $voucher->update(['status' => 'expired']);
                 } elseif ($voucher) {
                     $voucher->update(['status' => 'expired']);
                 }

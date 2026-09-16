@@ -685,13 +685,67 @@ class MikrotikService
                     $disconnected++;
                 }
 
+                $removedCookies = $this->removeCookiesForUser($client, $username);
+
                 return [
                     'username' => $username,
                     'disabled' => (bool) $userId,
                     'disconnected_sessions' => $disconnected,
+                    'removed_cookies' => $removedCookies,
                 ];
             }
         );
+    }
+
+    /** Remove only one customer's active sessions and saved login cookies. */
+    public function disconnectAndClearHotspotCookies(string $username, ?string $macAddress = null): array
+    {
+        return $this->run(
+            'disconnect-and-clear-hotspot-cookies',
+            function (Client $client) use ($username, $macAddress) {
+                $sessions = $client->query(
+                    (new Query('/ip/hotspot/active/print'))->where('user', $username)
+                )->read();
+
+                $disconnected = 0;
+                foreach ($sessions as $session) {
+                    if (empty($session['.id'])) {
+                        continue;
+                    }
+                    $client->query((new Query('/ip/hotspot/active/remove'))->equal('.id', $session['.id']))->read();
+                    $disconnected++;
+                }
+
+                return [
+                    'username' => $username,
+                    'disconnected_sessions' => $disconnected,
+                    'removed_cookies' => $this->removeCookiesForUser($client, $username, $macAddress),
+                ];
+            }
+        );
+    }
+
+    protected function removeCookiesForUser(Client $client, string $username, ?string $macAddress = null): int
+    {
+        $cookies = $client->query(
+            (new Query('/ip/hotspot/cookie/print'))->where('user', $username)
+        )->read();
+        $normalizedMac = $macAddress ? strtoupper(str_replace('-', ':', $macAddress)) : null;
+        $removed = 0;
+
+        foreach ($cookies as $cookie) {
+            if (empty($cookie['.id'])) {
+                continue;
+            }
+            $cookieMac = strtoupper(str_replace('-', ':', (string) ($cookie['mac-address'] ?? '')));
+            if ($normalizedMac && $cookieMac && $cookieMac !== $normalizedMac) {
+                continue;
+            }
+            $client->query((new Query('/ip/hotspot/cookie/remove'))->equal('.id', $cookie['.id']))->read();
+            $removed++;
+        }
+
+        return $removed;
     }
 
     /**
