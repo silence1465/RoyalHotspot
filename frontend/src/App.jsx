@@ -46,6 +46,7 @@ import AdminActiveSessionsPage from './pages/admin/ActiveSessions';
 import AccountingHistory from './pages/admin/AccountingHistory';
 import MikrotikSecurityGate from './components/MikrotikSecurityGate';
 import RouterManagementPage from './pages/admin/RouterManagement';
+import AdminUsers from './pages/admin/AdminUsers';
 
 const AdminRouters = () => <MikrotikSecurityGate><AdminRoutersPage /></MikrotikSecurityGate>;
 const AdminPackages = () => <MikrotikSecurityGate><AdminPackagesPage /></MikrotikSecurityGate>;
@@ -120,6 +121,7 @@ function App() {
               <Route path="/admin/bandwidth" element={<AdminBandwidth />} />
               <Route path="/admin/assign-package" element={<AdminAssignPackage />} />
               <Route path="/admin/active-sessions" element={<AdminActiveSessions />} />
+              <Route path="/admin/admin-users" element={<AdminUsers />} />
             </Route>
           </Route>
         </Routes>

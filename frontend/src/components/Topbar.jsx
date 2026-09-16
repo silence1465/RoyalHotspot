@@ -20,6 +20,12 @@ export default function Topbar({ onMenuClick, logoutRedirect = '/admin/login', f
     navigate(logoutRedirect);
   };
 
+  const selectedRouter = localStorage.getItem('admin_router_scope') || 'all';
+  const changeRouter = (value) => {
+    localStorage.setItem('admin_router_scope', value);
+    window.location.reload();
+  };
+
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between bg-white border-b border-slate-200 px-4 sm:px-6 py-3">
       <button
@@ -33,6 +39,19 @@ export default function Topbar({ onMenuClick, logoutRedirect = '/admin/login', f
       {showAdminExtras ? <GlobalSearch /> : <div className="hidden lg:block" />}
 
       <div className="flex items-center gap-4">
+        {showAdminExtras && user?.routers && (
+          <select
+            aria-label="Selected router"
+            className="input max-w-56 text-sm"
+            value={selectedRouter}
+            onChange={(event) => changeRouter(event.target.value)}
+          >
+            <option value="all">{user.role === 'super_admin' ? 'All Routers' : 'All Assigned Routers'}</option>
+            {user.routers.map((router) => (
+              <option key={router.id} value={router.id}>{router.name}</option>
+            ))}
+          </select>
+        )}
         {showAdminExtras && <SmsForwarderIcon />}
         {showAdminExtras && <NotificationBell />}
         <span className="text-sm text-slate-600 hidden sm:inline">

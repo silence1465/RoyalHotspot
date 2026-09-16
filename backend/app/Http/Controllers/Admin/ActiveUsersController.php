@@ -21,9 +21,15 @@ class ActiveUsersController extends Controller
     public function index(Request $request)
     {
         $routerId = $request->query('router_id');
-        $routers = $routerId
-            ? Router::where('id', $routerId)->where('connection_mode', 'live')->get()
-            : Router::where('connection_mode', 'live')->get();
+        $routerQuery = Router::where('connection_mode', 'live');
+        $allowedRouterIds = $request->attributes->get('admin_router_ids');
+        if ($allowedRouterIds !== null) {
+            $routerQuery->whereIn('id', $allowedRouterIds);
+        }
+        if ($routerId) {
+            $routerQuery->whereKey($routerId);
+        }
+        $routers = $routerQuery->get();
 
         $sessions = [];
 
@@ -111,7 +117,7 @@ class ActiveUsersController extends Controller
 
         if (! $result['success']) {
             return response()->json([
-                'message' => 'Could not reset session: ' . ($result['error'] ?? 'unknown error'),
+                'message' => 'Could not reset session: '.($result['error'] ?? 'unknown error'),
             ], 502);
         }
 

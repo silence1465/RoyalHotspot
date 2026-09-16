@@ -75,6 +75,23 @@ class PurchaseController extends Controller
             'voucher:id,code',
         ]);
 
+        $routerIds = $request->attributes->get('admin_router_ids');
+        if ($routerIds !== null) {
+            $query->whereIn('router_id', $routerIds);
+        }
+
+        $user = $request->user();
+        if (! $user->isSuperAdmin()) {
+            $methods = [];
+            if ($user->hasPermission('transactions.paystack.view')) {
+                $methods[] = 'paystack';
+            }
+            if ($user->hasPermission('transactions.momo.view')) {
+                $methods[] = 'momo';
+            }
+            $query->whereIn('payment_method', $methods);
+        }
+
         if ($status = $request->query('status')) {
             $query->where('status', $status);
         }
@@ -101,8 +118,13 @@ class PurchaseController extends Controller
         );
     }
 
-    public function show(Purchase $purchase)
+    public function show(Request $request, Purchase $purchase)
     {
+        $permission = $purchase->payment_method === 'paystack'
+            ? 'transactions.paystack.view'
+            : 'transactions.momo.view';
+        abort_unless($request->user()->hasPermission($permission), 403, 'You do not have permission to view this transaction.');
+
         return response()->json(
             $purchase->load([
                 'customer', 'package', 'router', 'voucher',
@@ -191,7 +213,7 @@ class PurchaseController extends Controller
 
         ActivityLog::record(
             'purchase.suspended',
-            "Admin suspended purchase {$purchase->reference}." .
+            "Admin suspended purchase {$purchase->reference}.".
                 ($purchase->isLive() && ! $mikrotikResult['success'] ? " (MikroTik side-effect failed: {$mikrotikResult['error']})" : ''),
             ['user_id' => $request->user()->id]
         );
@@ -211,7 +233,7 @@ class PurchaseController extends Controller
 
         ActivityLog::record(
             'purchase.reactivated',
-            "Admin reactivated purchase {$purchase->reference}." .
+            "Admin reactivated purchase {$purchase->reference}.".
                 ($purchase->isLive() && ! $mikrotikResult['success'] ? " (MikroTik side-effect failed: {$mikrotikResult['error']})" : ''),
             ['user_id' => $request->user()->id]
         );

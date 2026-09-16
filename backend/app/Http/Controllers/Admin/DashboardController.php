@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\BandwidthLog;
 use App\Models\Customer;
 use App\Models\Payment;
 use App\Models\Purchase;
@@ -10,6 +11,7 @@ use App\Models\Router;
 use App\Models\SystemSetting;
 use App\Models\Voucher;
 use App\Models\VoucherImportBatch;
+use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
@@ -30,8 +32,18 @@ class DashboardController extends Controller
 
         // Revenue is earned when payment is verified. A later access-state
         // transition (expired, suspended, queued, etc.) must not erase it.
-        $rows = Purchase::whereNotNull('verified_at')
+        $query = Purchase::whereNotNull('verified_at')
             ->where('verified_at', '>=', $from)
+            ->when(AdminRouterScope::ids($request) !== null, fn ($q) => $q->whereIn('router_id', AdminRouterScope::ids($request)));
+
+        if (! $request->user()->hasPermission('transactions.momo.view')) {
+            $query->where('payment_method', '!=', 'momo');
+        }
+        if (! $request->user()->hasPermission('transactions.paystack.view')) {
+            $query->where('payment_method', '!=', 'paystack');
+        }
+
+        $rows = $query
             ->selectRaw('DATE(verified_at) as date, payment_method, SUM(amount) as total')
             ->groupBy('date', 'payment_method')
             ->orderBy('date')
@@ -56,9 +68,13 @@ class DashboardController extends Controller
         return response()->json(['series' => array_values($series)]);
     }
 
-    public function stats()
+    public function stats(Request $request)
     {
         $now = Carbon::now();
+        $routerIds = AdminRouterScope::ids($request);
+        $purchases = Purchase::query()->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds));
+        $customers = Customer::query()->when($routerIds !== null, fn ($q) => $q->whereHas('purchases', fn ($p) => $p->whereIn('router_id', $routerIds)));
+        $routers = Router::query()->when($routerIds !== null, fn ($q) => $q->whereIn('id', $routerIds));
 
         $lastHeartbeat = SystemSetting::get('sms_forwarder_last_heartbeat_at');
         $heartbeatThreshold = (int) (SystemSetting::get('sms_heartbeat_threshold_minutes') ?? 5);
@@ -69,29 +85,29 @@ class DashboardController extends Controller
             'sms_forwarder_online' => (bool) $smsForwarderOnline,
             'sms_forwarder_last_seen' => $lastHeartbeat,
 
-            'total_customers' => Customer::count(),
-            'active_customers' => Customer::where('status', 'active')->count(),
-            'suspended_customers' => Customer::where('status', 'suspended')->count(),
+            'total_customers' => (clone $customers)->count(),
+            'active_customers' => (clone $customers)->where('status', 'active')->count(),
+            'suspended_customers' => (clone $customers)->where('status', 'suspended')->count(),
 
-            'total_routers' => Router::count(),
-            'online_routers' => Router::where('status', 'online')->count(),
-            'live_routers' => Router::where('connection_mode', 'live')->count(),
-            'manual_routers' => Router::where('connection_mode', 'manual')->count(),
+            'total_routers' => (clone $routers)->count(),
+            'online_routers' => (clone $routers)->where('status', 'online')->count(),
+            'live_routers' => (clone $routers)->where('connection_mode', 'live')->count(),
+            'manual_routers' => (clone $routers)->where('connection_mode', 'manual')->count(),
 
-            'active_purchases' => Purchase::active()->count(),
-            'live_active' => Purchase::active()->liveFulfilled()->count(),
-            'voucher_active' => Purchase::active()->voucherFulfilled()->count(),
-            'pending_activation' => Purchase::where('status', 'pending_activation')->count(),
-            'manual_review' => Purchase::where('status', 'manual_review')->count(),
+            'active_purchases' => (clone $purchases)->active()->count(),
+            'live_active' => (clone $purchases)->active()->liveFulfilled()->count(),
+            'voucher_active' => (clone $purchases)->active()->voucherFulfilled()->count(),
+            'pending_activation' => (clone $purchases)->where('status', 'pending_activation')->count(),
+            'manual_review' => (clone $purchases)->where('status', 'manual_review')->count(),
 
             // Combined across both gateways — sourced from Purchase, not
             // Payment, since Payment only ever covers Paystack and would
             // silently exclude every MoMo confirmation from "revenue".
-            'today_revenue' => (float) Purchase::whereNotNull('verified_at')
+            'today_revenue' => (float) (clone $purchases)->whereNotNull('verified_at')
                 ->whereDate('verified_at', $now->toDateString())
                 ->sum('amount'),
 
-            'month_revenue' => (float) Purchase::whereNotNull('verified_at')
+            'month_revenue' => (float) (clone $purchases)->whereNotNull('verified_at')
                 ->whereYear('verified_at', $now->year)
                 ->whereMonth('verified_at', $now->month)
                 ->sum('amount'),
@@ -101,10 +117,12 @@ class DashboardController extends Controller
                 'momo' => filter_var(SystemSetting::get('momo_enabled', '1'), FILTER_VALIDATE_BOOLEAN),
             ],
 
-            'today_bandwidth' => (int) \App\Models\BandwidthLog::where('date', $now->toDateString())
+            'today_bandwidth' => (int) BandwidthLog::where('date', $now->toDateString())
+                ->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds))
                 ->selectRaw('COALESCE(SUM(bytes_in + bytes_out), 0) as total')->value('total'),
 
-            'month_bandwidth' => (int) \App\Models\BandwidthLog::where('date', '>=', $now->copy()->startOfMonth()->toDateString())
+            'month_bandwidth' => (int) BandwidthLog::where('date', '>=', $now->copy()->startOfMonth()->toDateString())
+                ->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds))
                 ->selectRaw('COALESCE(SUM(bytes_in + bytes_out), 0) as total')->value('total'),
 
             'low_stock_package_count' => Voucher::select('package_id')

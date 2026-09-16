@@ -17,6 +17,9 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  if ((sessionStorage.getItem('auth_role') || localStorage.getItem('auth_role')) === 'admin') {
+    config.headers['X-Router-Id'] = localStorage.getItem('admin_router_scope') || 'all';
+  }
   return config;
 });
 

@@ -2,9 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Models\ActivityLog;
-use App\Models\User;
 use App\Models\Router;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
@@ -70,6 +69,7 @@ class MikrotikAdminSecurityTest extends TestCase
         ]);
         $admin = User::factory()->admin()->create();
         $router = Router::factory()->create(['connection_mode' => 'live']);
+        $admin->routers()->attach($router);
         $token = $admin->createToken('validation-admin', ['admin'])->plainTextToken;
         $this->withToken($token)->postJson('/api/v1/admin/mikrotik-security/unlock', [
             'security_key' => 'correct-secure-key',

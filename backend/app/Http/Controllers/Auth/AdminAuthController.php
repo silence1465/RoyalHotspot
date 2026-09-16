@@ -4,11 +4,12 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
+use App\Models\Router;
 use App\Models\User;
+use App\Services\TotpService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
-use App\Services\TotpService;
 
 class AdminAuthController extends Controller
 {
@@ -51,7 +52,7 @@ class AdminAuthController extends Controller
 
         return response()->json([
             'token' => $token,
-            'user' => $user,
+            'user' => $this->adminPayload($user),
         ]);
     }
 
@@ -68,6 +69,17 @@ class AdminAuthController extends Controller
 
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        return response()->json($this->adminPayload($request->user()));
+    }
+
+    private function adminPayload(User $user): array
+    {
+        return array_merge($user->toArray(), [
+            'permissions' => $user->effectivePermissions(),
+            'routers' => $user->isSuperAdmin()
+                ? Router::orderBy('name')->get(['id', 'name', 'location'])
+                : $user->routers()->orderBy('name')->get(['routers.id', 'name', 'location']),
+            'can_select_all_routers' => true,
+        ]);
     }
 }

@@ -7,6 +7,8 @@ use App\Models\Customer;
 use App\Models\Payment;
 use App\Models\Purchase;
 use App\Models\Router;
+use App\Support\AdminRouterScope;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
@@ -25,7 +27,15 @@ class ReportController extends Controller
         $year = (int) ($validated['year'] ?? now()->year);
         $query = Purchase::query()
             ->whereNotNull('verified_at')
-            ->whereYear('verified_at', $year);
+            ->whereYear('verified_at', $year)
+            ->when(AdminRouterScope::ids($request) !== null, fn ($q) => $q->whereIn('router_id', AdminRouterScope::ids($request)));
+
+        if ($request->user() && ! $request->user()->hasPermission('transactions.paystack.view')) {
+            $query->where('payment_method', '!=', 'paystack');
+        }
+        if ($request->user() && ! $request->user()->hasPermission('transactions.momo.view')) {
+            $query->where('payment_method', '!=', 'momo');
+        }
 
         if (isset($validated['month'])) {
             $query->whereMonth('verified_at', $validated['month']);
@@ -106,7 +116,16 @@ class ReportController extends Controller
 
     public function payments(Request $request)
     {
-        $query = Payment::with('customer:id,full_name,username');
+        $routerIds = AdminRouterScope::ids($request);
+        $query = Payment::with('customer:id,full_name,username')
+            ->when($routerIds !== null, fn ($q) => $q->whereHas('purchase', fn ($p) => $p->whereIn('router_id', $routerIds)));
+
+        if ($request->user() && ! $request->user()->hasPermission('transactions.paystack.view')) {
+            $query->where('provider', '!=', 'paystack');
+        }
+        if ($request->user() && ! $request->user()->hasPermission('transactions.momo.view')) {
+            $query->where('provider', '!=', 'momo');
+        }
 
         if ($status = $request->query('status')) {
             $query->where('status', $status);
@@ -147,6 +166,10 @@ class ReportController extends Controller
     public function customers(Request $request)
     {
         $query = Customer::query();
+        $routerIds = AdminRouterScope::ids($request);
+        if ($routerIds !== null) {
+            $query->whereHas('purchases', fn ($p) => $p->whereIn('router_id', $routerIds));
+        }
 
         if ($search = $request->query('search')) {
             $query->where(function ($q) use ($search) {
@@ -172,7 +195,7 @@ class ReportController extends Controller
         if ($request->query('export') === 'pdf') {
             $customers = $query->latest()->get();
 
-            return \Barryvdh\DomPDF\Facade\Pdf::loadView('admin.customers-pdf', ['customers' => $customers])
+            return Pdf::loadView('admin.customers-pdf', ['customers' => $customers])
                 ->setPaper('a4', 'portrait')
                 ->download('customers.pdf');
         }
@@ -197,7 +220,8 @@ class ReportController extends Controller
      */
     public function routerActivity(Request $request)
     {
-        $routers = Router::withCount([
+        $routerIds = AdminRouterScope::ids($request);
+        $routers = Router::when($routerIds !== null, fn ($q) => $q->whereIn('id', $routerIds))->withCount([
             'mikrotikLogs as total_actions',
             'mikrotikLogs as failed_actions' => fn ($q) => $q->where('status', 'failed'),
             'hotspotUsers as connected_customers' => fn ($q) => $q->where('disabled', false),

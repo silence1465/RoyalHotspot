@@ -15,52 +15,67 @@ import {
   Zap,
   X,
   BookOpen,
+  ShieldCheck,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const DEFAULT_NAV_SECTIONS = [
   {
     label: 'Overview',
-    items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+    items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'dashboard.view' }],
   },
   {
     label: 'Operations',
     items: [
-      { to: '/admin/router-management', label: 'Router Management', icon: RouterIcon },
-      { to: '/admin/routers', label: 'Routers', icon: RouterIcon },
-      { to: '/admin/customers', label: 'Customers', icon: Users },
-      { to: '/admin/packages', label: 'Packages', icon: Package },
-      { to: '/admin/bandwidth', label: 'Bandwidth', icon: Activity },
-      { to: '/admin/active-sessions', label: 'Active Sessions', icon: Zap },
+      { to: '/admin/router-management', label: 'Router Management', icon: RouterIcon, permission: 'routers.manage' },
+      { to: '/admin/routers', label: 'Routers', icon: RouterIcon, permission: 'routers.view' },
+      { to: '/admin/customers', label: 'Customers', icon: Users, permission: 'customers.view' },
+      { to: '/admin/packages', label: 'Packages', icon: Package, permission: 'packages.view' },
+      { to: '/admin/bandwidth', label: 'Bandwidth', icon: Activity, permission: 'bandwidth.view' },
+      { to: '/admin/active-sessions', label: 'Active Sessions', icon: Zap, permission: 'sessions.view' },
     ],
   },
   {
     label: 'Payments',
     items: [
-      { to: '/admin/purchases', label: 'Purchases', icon: CreditCard },
-      { to: '/admin/payments', label: 'Payments', icon: Receipt },
-      { to: '/admin/accounting', label: 'Accounting History', icon: BookOpen },
-      { to: '/admin/vouchers', label: 'Vouchers', icon: Ticket },
-      { to: '/admin/assign-package', label: 'Assign Package', icon: Gift },
-      { to: '/admin/free-trials', label: 'Free Campaigns', icon: Gift },
+      { to: '/admin/purchases', label: 'Purchases', icon: CreditCard, permissions: ['transactions.paystack.view', 'transactions.momo.view'] },
+      { to: '/admin/payments', label: 'Payments', icon: Receipt, permissions: ['transactions.paystack.view', 'transactions.momo.view'] },
+      { to: '/admin/accounting', label: 'Accounting History', icon: BookOpen, permission: 'reports.view' },
+      { to: '/admin/vouchers', label: 'Vouchers', icon: Ticket, permission: 'vouchers.view' },
+      { to: '/admin/assign-package', label: 'Assign Package', icon: Gift, permission: 'purchases.assign' },
+      { to: '/admin/free-trials', label: 'Free Campaigns', icon: Gift, permission: 'packages.manage' },
     ],
   },
   {
     label: 'Support',
-    items: [{ to: '/admin/complaints', label: 'Complaints', icon: MessageSquare }],
+    items: [{ to: '/admin/complaints', label: 'Complaints', icon: MessageSquare, permission: 'complaints.view' }],
   },
   {
     label: 'System',
     items: [
-      { to: '/admin/logs', label: 'Logs', icon: ScrollText },
-      { to: '/admin/settings', label: 'Settings', icon: Settings },
+      { to: '/admin/logs', label: 'Logs', icon: ScrollText, permission: 'logs.view' },
+      { to: '/admin/settings', label: 'Settings', icon: Settings, superAdminOnly: true },
+      { to: '/admin/admin-users', label: 'Administrators', icon: ShieldCheck, superAdminOnly: true },
     ],
   },
 ];
 
 function NavSections({ sections, onNavigate, badges = {} }) {
+  const { user } = useAuth();
+  const visibleSections = sections.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => {
+      if (!item.permission && !item.permissions && !item.superAdminOnly) return true;
+      if (user?.role === 'super_admin') return true;
+      if (item.superAdminOnly) return false;
+      if (item.permissions) return item.permissions.some((permission) => user?.permissions?.includes(permission));
+      return user?.permissions?.includes(item.permission);
+    }),
+  })).filter((section) => section.items.length);
+
   return (
     <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-auto">
-      {sections.map((section) => (
+      {visibleSections.map((section) => (
         <div key={section.label}>
           <p className="px-3 mb-1.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
             {section.label}

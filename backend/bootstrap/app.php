@@ -1,9 +1,17 @@
 <?php
 
+use App\Http\Middleware\EnsureUserHasRole;
+use App\Http\Middleware\RequireAdminPermission;
+use App\Http\Middleware\RequireMikrotikAdminUnlock;
+use App\Http\Middleware\ResolveAdminScope;
+use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\VerifySmsForwarderToken;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Console\Scheduling\Schedule;
+use Laravel\Sanctum\Http\Middleware\CheckAbilities;
+use Laravel\Sanctum\Http\Middleware\CheckForAnyAbility;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -36,7 +44,7 @@ return Application::configure(basePath: dirname(__DIR__))
             ->runInBackground();
     })
     ->withMiddleware(function (Middleware $middleware) {
-        $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
+        $middleware->append(SecurityHeaders::class);
         $middleware->redirectGuestsTo(fn () => null);
 
         $middleware->api(prepend: [
@@ -55,14 +63,16 @@ return Application::configure(basePath: dirname(__DIR__))
         // routes use ['auth:admin', 'abilities:admin'] or
         // ['auth:customer', 'abilities:customer'] — see routes/api.php.
         $middleware->alias([
-            'abilities' => \Laravel\Sanctum\Http\Middleware\CheckAbilities::class,
-            'ability' => \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class,
-            'role' => \App\Http\Middleware\EnsureUserHasRole::class,
+            'abilities' => CheckAbilities::class,
+            'ability' => CheckForAnyAbility::class,
+            'role' => EnsureUserHasRole::class,
             // Royal WiFi extension — shared-secret auth for the SMS
             // Forwarder webhook, a machine actor that doesn't fit the
             // customer/admin Sanctum abilities at all.
-            'sms-forwarder' => \App\Http\Middleware\VerifySmsForwarderToken::class,
-            'mikrotik-unlocked' => \App\Http\Middleware\RequireMikrotikAdminUnlock::class,
+            'sms-forwarder' => VerifySmsForwarderToken::class,
+            'mikrotik-unlocked' => RequireMikrotikAdminUnlock::class,
+            'admin-scope' => ResolveAdminScope::class,
+            'admin-permission' => RequireAdminPermission::class,
         ]);
 
         $middleware->throttleApi();

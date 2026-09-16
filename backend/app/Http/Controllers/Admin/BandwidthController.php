@@ -3,37 +3,43 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\BandwidthLog;
-use App\Models\ActivityLog;
-use App\Models\MonthlyCapacityAdjustment;
-use App\Services\FupService;
-use App\Models\Purchase;
 use App\Jobs\ApplyUsagePolicyJob;
+use App\Models\ActivityLog;
+use App\Models\BandwidthLog;
+use App\Models\MonthlyCapacityAdjustment;
+use App\Models\Purchase;
+use App\Services\FupService;
+use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 class BandwidthController extends Controller
 {
-    public function summary(FupService $fup)
+    public function summary(Request $request, FupService $fup)
     {
         $today = now()->toDateString();
         $monthStart = now()->startOfMonth()->toDateString();
 
+        $routerIds = AdminRouterScope::ids($request);
         $todayTotals = BandwidthLog::where('date', $today)
+            ->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds))
             ->selectRaw('SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out')
             ->first();
 
         $monthTotals = BandwidthLog::where('date', '>=', $monthStart)
+            ->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds))
             ->selectRaw('SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out')
             ->first();
 
         $todayByCustomer = BandwidthLog::where('date', $today)
+            ->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds))
             ->selectRaw('customer_id, SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out')
             ->groupBy('customer_id')
             ->get()
             ->keyBy('customer_id');
 
         $totalByCustomer = BandwidthLog::with('customer:id,full_name,username')
+            ->when($routerIds !== null, fn ($q) => $q->whereIn('router_id', $routerIds))
             ->selectRaw('customer_id, SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out')
             ->groupBy('customer_id')
             ->orderByRaw('SUM(bytes_in) + SUM(bytes_out) DESC')
@@ -128,6 +134,7 @@ class BandwidthController extends Controller
             $year = (int) $request->query('year', now()->year);
 
             $rows = BandwidthLog::whereYear('date', $year)
+                ->when(AdminRouterScope::ids($request) !== null, fn ($q) => $q->whereIn('router_id', AdminRouterScope::ids($request)))
                 ->selectRaw("DATE_FORMAT(date, '%Y-%m') as bucket, SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out")
                 ->groupBy('bucket')
                 ->orderBy('bucket')
@@ -141,6 +148,7 @@ class BandwidthController extends Controller
         $end = $start->copy()->endOfMonth();
 
         $rows = BandwidthLog::whereBetween('date', [$start->toDateString(), $end->toDateString()])
+            ->when(AdminRouterScope::ids($request) !== null, fn ($q) => $q->whereIn('router_id', AdminRouterScope::ids($request)))
             ->selectRaw('date as bucket, SUM(bytes_in) as bytes_in, SUM(bytes_out) as bytes_out')
             ->groupBy('date')
             ->orderBy('date')

@@ -19,6 +19,11 @@ class PackageController extends Controller
     {
         $query = InternetPackage::with('routerProfiles.router:id,name');
 
+        $routerIds = $request->attributes->get('admin_router_ids');
+        if ($routerIds !== null) {
+            $query->whereHas('routerProfiles', fn ($profiles) => $profiles->whereIn('router_id', $routerIds));
+        }
+
         if ($search = $request->query('search')) {
             $query->where('name', 'like', "%{$search}%");
         }
@@ -36,6 +41,7 @@ class PackageController extends Controller
     {
         $data = $request->validated();
         $profiles = $data['profiles'] ?? [];
+        $this->ensureProfileAccess($request, $profiles);
         unset($data['profiles']);
         $data['status'] = $data['status'] ?? 'active';
         $data['sales_channel'] = $data['sales_channel'] ?? 'subscription';
@@ -43,6 +49,7 @@ class PackageController extends Controller
         $package = DB::transaction(function () use ($data, $profiles) {
             $package = InternetPackage::create($data);
             $this->syncProfiles($package, $profiles);
+
             return $package;
         });
 
@@ -59,8 +66,10 @@ class PackageController extends Controller
         );
     }
 
-    public function show(InternetPackage $package)
+    public function show(Request $request, InternetPackage $package)
     {
+        $this->ensurePackageAccess($request, $package);
+
         return response()->json($package->load('routerProfiles.router:id,name'));
     }
 
@@ -68,6 +77,10 @@ class PackageController extends Controller
     {
         $data = $request->validated();
         $profiles = $data['profiles'] ?? null; // null = "not submitted", leave mappings untouched
+        $this->ensurePackageAccess($request, $package);
+        if ($profiles !== null) {
+            $this->ensureProfileAccess($request, $profiles);
+        }
         unset($data['profiles']);
 
         DB::transaction(function () use ($package, $data, $profiles) {
@@ -90,6 +103,7 @@ class PackageController extends Controller
 
     public function destroy(Request $request, InternetPackage $package)
     {
+        $this->ensurePackageAccess($request, $package);
         // Purchase::active() covers every active-equivalent status
         // (active, voucher_assigned, completed) — a single 'active' ===
         // check here would have missed voucher-fulfilled purchases
@@ -103,12 +117,12 @@ class PackageController extends Controller
         ];
         $usedBy = collect($usage)
             ->filter()
-            ->map(fn ($count, $type) => "{$count} {$type}" . ($count === 1 ? '' : 's'))
+            ->map(fn ($count, $type) => "{$count} {$type}".($count === 1 ? '' : 's'))
             ->values();
 
         if ($usedBy->isNotEmpty()) {
             return response()->json([
-                'message' => 'This package cannot be deleted because it is used by ' . $usedBy->join(', ') . '. Set its status to Inactive instead to preserve billing history.',
+                'message' => 'This package cannot be deleted because it is used by '.$usedBy->join(', ').'. Set its status to Inactive instead to preserve billing history.',
             ], 422);
         }
 
@@ -123,6 +137,25 @@ class PackageController extends Controller
         ActivityLog::record('package.deleted', "Package '{$package->name}' deleted.", ['user_id' => $request->user()->id]);
 
         return response()->json(['message' => 'Package deleted.']);
+    }
+
+    protected function ensurePackageAccess(Request $request, InternetPackage $package): void
+    {
+        $routerIds = $request->attributes->get('admin_router_ids');
+        if ($routerIds !== null && ! $package->routerProfiles()->whereIn('router_id', $routerIds)->exists()) {
+            abort(403, 'You do not have access to this package.');
+        }
+    }
+
+    protected function ensureProfileAccess(Request $request, array $profiles): void
+    {
+        foreach ($profiles as $profile) {
+            abort_unless(
+                $request->user()->canAccessRouter((int) $profile['router_id']),
+                403,
+                'You cannot configure a package for an unassigned router.'
+            );
+        }
     }
 
     /**

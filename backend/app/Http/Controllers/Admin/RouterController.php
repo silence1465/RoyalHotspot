@@ -7,6 +7,7 @@ use App\Http\Requests\Admin\RouterRequest;
 use App\Models\ActivityLog;
 use App\Models\Router;
 use App\Services\MikrotikService;
+use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
 
 class RouterController extends Controller
@@ -14,6 +15,7 @@ class RouterController extends Controller
     public function index(Request $request)
     {
         $query = Router::query();
+        AdminRouterScope::apply($query, $request, 'id');
 
         if ($search = $request->query('search')) {
             $query->where(function ($q) use ($search) {
@@ -117,7 +119,7 @@ class RouterController extends Controller
             'success' => $result['success'],
             'message' => $result['success']
                 ? 'Connected successfully.'
-                : ('Connection failed: ' . ($result['error'] ?? 'unknown error')),
+                : ('Connection failed: '.($result['error'] ?? 'unknown error')),
             'data' => $result['data'],
         ], $result['success'] ? 200 : 502);
     }
@@ -163,7 +165,7 @@ class RouterController extends Controller
         if (! $walledGardenResult['success']) {
             return response()->json([
                 'success' => false,
-                'message' => 'Could not add walled-garden entry for the backend: ' . ($walledGardenResult['error'] ?? 'unknown error'),
+                'message' => 'Could not add walled-garden entry for the backend: '.($walledGardenResult['error'] ?? 'unknown error'),
             ], 502);
         }
 
@@ -178,7 +180,7 @@ class RouterController extends Controller
             if (! $frontendWalledGardenResult['success']) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Backend walled-garden entry added, but the frontend entry failed: ' . ($frontendWalledGardenResult['error'] ?? 'unknown error'),
+                    'message' => 'Backend walled-garden entry added, but the frontend entry failed: '.($frontendWalledGardenResult['error'] ?? 'unknown error'),
                 ], 502);
             }
         }
@@ -189,7 +191,7 @@ class RouterController extends Controller
         if (! $fetchResult['success']) {
             return response()->json([
                 'success' => false,
-                'message' => 'Walled garden entry added, but fetching the login page failed: ' . ($fetchResult['error'] ?? 'unknown error'),
+                'message' => 'Walled garden entry added, but fetching the login page failed: '.($fetchResult['error'] ?? 'unknown error'),
             ], 502);
         }
 
