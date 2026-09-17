@@ -32,7 +32,7 @@ class RouterController extends Controller
         }
 
         return response()->json(
-            $query->with('isps')->latest()->paginate($request->integer('per_page', 10))
+            $query->with('isps.latestSessionSnapshot')->latest()->paginate($request->integer('per_page', 10))
         );
     }
 
@@ -61,7 +61,7 @@ class RouterController extends Controller
 
     public function show(Router $router)
     {
-        return response()->json($router->load('isps'));
+        return response()->json($router->load('isps.latestSessionSnapshot'));
     }
 
     public function update(RouterRequest $request, Router $router)
@@ -91,7 +91,7 @@ class RouterController extends Controller
 
         ActivityLog::record('router.updated', "Router '{$router->name}' updated.", ['user_id' => $request->user()->id]);
 
-        return response()->json($router->fresh()->load('isps'));
+        return response()->json($router->fresh()->load('isps.latestSessionSnapshot'));
     }
 
     public function destroy(Request $request, Router $router)

@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\ComplaintController;
 use App\Http\Controllers\Admin\CustomerController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\FreeTrialCampaignController;
+use App\Http\Controllers\Admin\IspSessionController;
 use App\Http\Controllers\Admin\LogController;
 use App\Http\Controllers\Admin\MikrotikManagementController;
 use App\Http\Controllers\Admin\MikrotikSecurityController;
@@ -117,6 +118,10 @@ Route::prefix('v1')->group(function () {
             ->middleware(['admin-permission:routers.manage', 'mikrotik-unlocked']);
         Route::post('/routers/{router}/setup-guest-portal', [RouterController::class, 'setupGuestPortal'])
             ->middleware(['admin-permission:routers.manage', 'mikrotik-unlocked']);
+        Route::get('/routers/{router}/isp-sessions', [IspSessionController::class, 'index'])
+            ->middleware(['admin-permission:sessions.view', 'mikrotik-unlocked']);
+        Route::post('/routers/{router}/isp-sessions/refresh', [IspSessionController::class, 'refresh'])
+            ->middleware(['admin-permission:sessions.view', 'mikrotik-unlocked']);
 
         Route::middleware(['admin-permission:routers.manage', 'mikrotik-unlocked'])->prefix('router-management/{router}')->group(function () {
             Route::get('/overview', [MikrotikManagementController::class, 'overview']);
@@ -257,6 +262,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/purchases/{reference}/status', [App\Http\Controllers\Customer\PurchaseController::class, 'status']);
         Route::post('/purchases/{reference}/acknowledge-payment', [App\Http\Controllers\Customer\PurchaseController::class, 'acknowledgePayment']);
         Route::post('/purchases/{reference}/verify', [App\Http\Controllers\Customer\PurchaseController::class, 'verify'])
+            ->middleware('throttle:order-verify');
+        Route::post('/purchases/{reference}/verify-paystack', [App\Http\Controllers\Customer\PurchaseController::class, 'verifyPaystack'])
             ->middleware('throttle:order-verify');
         Route::post('/purchases/{purchase}/activate', [App\Http\Controllers\Customer\PurchaseController::class, 'activate']);
         Route::post('/purchases/{purchase}/connect', [App\Http\Controllers\Customer\PurchaseController::class, 'connect']);

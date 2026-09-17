@@ -112,6 +112,24 @@ class MikrotikService
     }
 
     /**
+     * Fetch one reduced connection-tracking snapshot for aggregation in
+     * Laravel. This is deliberately one query per router, never one query
+     * per customer.
+     */
+    public function getConnectionTrackingSnapshot(): array
+    {
+        return $this->run(
+            'get-connection-tracking-snapshot',
+            function (Client $client) {
+                $query = (new Query('/ip/firewall/connection/print'))
+                    ->equal('.proplist', '.id,protocol,connection-mark,src-address,dst-address,tcp-state,seen-reply,assured,timeout,orig-bytes,repl-bytes,orig-rate,repl-rate');
+
+                return $client->query($query)->read();
+            }
+        );
+    }
+
+    /**
      * Create a new hotspot user.
      */
     public function createHotspotUser(

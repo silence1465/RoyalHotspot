@@ -64,10 +64,48 @@ class RouterRequest extends FormRequest
             'isps.*.wan_interface' => ['required', 'string', 'max:100', 'distinct:ignore_case', 'regex:/^[A-Za-z0-9_.:+-]+$/'],
             'isps.*.gateway' => ['required', 'ip'],
             'isps.*.routing_table' => ['required', 'string', 'max:100', 'regex:/^[A-Za-z0-9_.-]+$/'],
+            'isps.*.connection_mark' => ['nullable', 'string', 'max:100', 'distinct:ignore_case', 'regex:/^[A-Za-z0-9_.-]+$/'],
             'isps.*.monthly_capacity_gb' => ['nullable', 'numeric', 'min:0.001', 'max:1048576'],
             'isps.*.subscriber_limit' => ['nullable', 'integer', 'min:1', 'max:1000000'],
             'isps.*.priority' => ['required', 'integer', 'min:1', 'max:65535'],
             'isps.*.enabled' => ['required', 'boolean'],
+            'isps.*.session_monitoring_enabled' => ['sometimes', 'boolean'],
+            'isps.*.session_protection_enabled' => ['sometimes', 'boolean'],
+            'isps.*.stale_cleanup_enabled' => ['sometimes', 'boolean'],
+            'isps.*.emergency_cleanup_enabled' => ['sometimes', 'boolean'],
+            'isps.*.session_soft_limit' => ['nullable', 'integer', 'min:1', 'max:10000000'],
+            'isps.*.session_hard_limit' => ['nullable', 'integer', 'min:2', 'max:10000000'],
+            'isps.*.session_emergency_limit' => ['nullable', 'integer', 'min:3', 'max:10000000'],
+            'isps.*.max_tcp_sessions_per_client' => ['nullable', 'integer', 'min:10', 'max:1000000'],
+            'isps.*.max_udp_sessions_per_client' => ['nullable', 'integer', 'min:5', 'max:1000000'],
+            'isps.*.max_total_sessions_per_client' => ['nullable', 'integer', 'min:10', 'max:1000000'],
         ];
+    }
+
+    public function withValidator($validator): void
+    {
+        $validator->after(function ($validator) {
+            foreach ($this->input('isps', []) as $index => $isp) {
+                $monitoring = filter_var($isp['session_monitoring_enabled'] ?? false, FILTER_VALIDATE_BOOLEAN);
+                if ($monitoring && blank($isp['connection_mark'] ?? null)) {
+                    $validator->errors()->add("isps.{$index}.connection_mark", 'A RouterOS connection mark is required when monitoring is enabled.');
+                }
+
+                $soft = isset($isp['session_soft_limit']) && $isp['session_soft_limit'] !== '' ? (int) $isp['session_soft_limit'] : null;
+                $hard = isset($isp['session_hard_limit']) && $isp['session_hard_limit'] !== '' ? (int) $isp['session_hard_limit'] : null;
+                $emergency = isset($isp['session_emergency_limit']) && $isp['session_emergency_limit'] !== '' ? (int) $isp['session_emergency_limit'] : null;
+                if ($monitoring && ($soft === null || $hard === null || $emergency === null)) {
+                    $validator->errors()->add("isps.{$index}.session_soft_limit", 'Soft, hard and emergency limits are required when monitoring is enabled.');
+                } elseif ($soft !== null && $hard !== null && $emergency !== null && ! ($soft < $hard && $hard < $emergency)) {
+                    $validator->errors()->add("isps.{$index}.session_soft_limit", 'Limits must increase in this order: soft < hard < emergency.');
+                }
+
+                if (filter_var($isp['session_protection_enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)
+                    || filter_var($isp['stale_cleanup_enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)
+                    || filter_var($isp['emergency_cleanup_enabled'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
+                    $validator->errors()->add("isps.{$index}.session_protection_enabled", 'Traffic protection and cleanup remain locked until this ISP connection mark is validated on the physical router.');
+                }
+            }
+        });
     }
 }

@@ -40,6 +40,11 @@ return Application::configure(basePath: dirname(__DIR__))
             ->withoutOverlapping()
             ->runInBackground();
 
+        $schedule->command('wan-sessions:snapshot')
+            ->everyMinute()
+            ->withoutOverlapping()
+            ->runInBackground();
+
         // Router health — 2 minutes strikes a balance between catching
         // an outage quickly and not hammering every live router with a
         // connection attempt every 60 seconds.

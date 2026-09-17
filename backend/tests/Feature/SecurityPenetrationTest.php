@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\ActivateHotspotUserJob;
 use App\Models\Customer;
 use App\Models\InternetPackage;
 use App\Models\Payment;
@@ -12,6 +13,7 @@ use App\Models\SystemSetting;
 use App\Models\User;
 use App\Services\PaystackService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class SecurityPenetrationTest extends TestCase
@@ -148,8 +150,7 @@ class SecurityPenetrationTest extends TestCase
         $paystack->shouldReceive('generateReference')->once()->andReturn('HBS_PAYSTACK_TEST');
         $paystack->shouldReceive('initializeTransaction')
             ->once()
-            ->withArgs(fn ($email, $amount, $reference, $metadata) =>
-                $email === "customer{$customer->id}@freedomdata.shop"
+            ->withArgs(fn ($email, $amount, $reference, $metadata) => $email === "customer{$customer->id}@freedomdata.shop"
                 && $amount === 10200
                 && $reference === 'HBS_PAYSTACK_TEST'
                 && $metadata['package_id'] === $package->id)
@@ -178,6 +179,173 @@ class SecurityPenetrationTest extends TestCase
         $this->assertSame('102.00', $purchase->amount);
         $this->assertSame('102.00', $payment->amount);
         $this->assertSame('pending', $payment->status);
+    }
+
+    public function test_signed_paystack_payment_activates_once_and_duplicate_webhook_is_idempotent(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->active()->create(['email' => 'paystack@example.com']);
+        $router = Router::factory()->create([
+            'connection_mode' => 'live',
+            'paystack_enabled' => true,
+        ]);
+        $package = InternetPackage::factory()->create(['price' => 100, 'status' => 'active']);
+        RouterPackageProfile::create([
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'profile_name' => 'paystack-live-profile',
+            'shared_users' => 1,
+        ]);
+        SystemSetting::set('paystack_enabled', true);
+
+        $paystack = \Mockery::mock(PaystackService::class);
+        $paystack->shouldReceive('generateReference')->once()->andReturn('HBS_PAYSTACK_SUCCESS');
+        $paystack->shouldReceive('initializeTransaction')->once()->andReturn([
+            'success' => true,
+            'authorization_url' => 'https://checkout.paystack.com/test-success',
+            'reference' => 'HBS_PAYSTACK_SUCCESS',
+            'raw' => ['status' => true],
+        ]);
+        $paystack->shouldReceive('verifyWebhookSignature')->twice()->andReturnTrue();
+        $paystack->shouldReceive('verifyTransaction')->once()->with('HBS_PAYSTACK_SUCCESS')->andReturn([
+            'success' => true,
+            'data' => [
+                'status' => 'success',
+                'amount' => 10200,
+                'channel' => 'card',
+                'reference' => 'HBS_PAYSTACK_SUCCESS',
+            ],
+        ]);
+        $this->app->instance(PaystackService::class, $paystack);
+
+        $token = $customer->createToken('paystack-success', ['customer'])->plainTextToken;
+        $this->withToken($token)->postJson('/api/v1/customer/purchases', [
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'payment_method' => 'paystack',
+        ])->assertOk()->assertJsonPath('reference', 'HBS_PAYSTACK_SUCCESS');
+
+        $this->withToken($token)
+            ->postJson('/api/v1/customer/purchases/HBS_PAYSTACK_SUCCESS/verify-paystack')
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('status', 'successful')
+            ->assertJsonPath('purchase_status', 'active');
+
+        $payload = [
+            'event' => 'charge.success',
+            'data' => ['reference' => 'HBS_PAYSTACK_SUCCESS'],
+        ];
+        $headers = ['X-Paystack-Signature' => 'valid-test-signature'];
+
+        $this->postJson('/api/v1/webhooks/paystack', $payload, $headers)
+            ->assertOk()->assertJsonPath('message', 'ok');
+        $this->postJson('/api/v1/webhooks/paystack', $payload, $headers)
+            ->assertOk()->assertJsonPath('message', 'ok');
+
+        $purchase = Purchase::where('reference', 'HBS_PAYSTACK_SUCCESS')->firstOrFail();
+        $payment = Payment::where('reference', 'HBS_PAYSTACK_SUCCESS')->firstOrFail();
+        $this->assertSame('successful', $payment->status);
+        $this->assertSame('card', $payment->channel);
+        $this->assertNotNull($payment->paid_at);
+        $this->assertSame('active', $purchase->status);
+        $this->assertSame('paystack_verification', $purchase->verification_method);
+        $this->assertNotNull($purchase->verified_at);
+        Queue::assertPushed(ActivateHotspotUserJob::class, 1);
+        $this->assertDatabaseCount('payments', 1);
+        $this->assertDatabaseCount('purchases', 1);
+    }
+
+    public function test_customer_cannot_verify_another_customers_paystack_reference(): void
+    {
+        $owner = Customer::factory()->active()->create();
+        $otherCustomer = Customer::factory()->active()->create();
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $package = InternetPackage::factory()->create();
+        $purchase = Purchase::create([
+            'customer_id' => $owner->id,
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'subtotal' => 10,
+            'payment_fee' => 0.20,
+            'amount' => 10.20,
+            'reference' => 'HBS_PRIVATE_REFERENCE',
+            'payment_method' => 'paystack',
+            'fulfillment_type' => 'live',
+            'status' => 'pending',
+        ]);
+        Payment::create([
+            'customer_id' => $owner->id,
+            'purchase_id' => $purchase->id,
+            'reference' => 'HBS_PRIVATE_REFERENCE',
+            'amount' => 10.20,
+            'currency' => 'GHS',
+            'status' => 'pending',
+            'provider' => 'paystack',
+        ]);
+
+        $paystack = \Mockery::mock(PaystackService::class);
+        $paystack->shouldNotReceive('verifyTransaction');
+        $this->app->instance(PaystackService::class, $paystack);
+
+        $token = $otherCustomer->createToken('wrong-customer', ['customer'])->plainTextToken;
+        $this->withToken($token)
+            ->postJson('/api/v1/customer/purchases/HBS_PRIVATE_REFERENCE/verify-paystack')
+            ->assertNotFound();
+
+        $this->assertSame('pending', Payment::where('reference', 'HBS_PRIVATE_REFERENCE')->value('status'));
+        $this->assertSame('pending', $purchase->fresh()->status);
+    }
+
+    public function test_paystack_amount_mismatch_never_activates_purchase(): void
+    {
+        Queue::fake();
+        $customer = Customer::factory()->active()->create();
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $package = InternetPackage::factory()->create();
+        $purchase = Purchase::create([
+            'customer_id' => $customer->id,
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'subtotal' => 10,
+            'payment_fee' => 0.20,
+            'amount' => 10.20,
+            'reference' => 'HBS_AMOUNT_MISMATCH',
+            'payment_method' => 'paystack',
+            'fulfillment_type' => 'live',
+            'status' => 'pending',
+        ]);
+        Payment::create([
+            'customer_id' => $customer->id,
+            'purchase_id' => $purchase->id,
+            'reference' => 'HBS_AMOUNT_MISMATCH',
+            'amount' => 10.20,
+            'currency' => 'GHS',
+            'status' => 'pending',
+            'provider' => 'paystack',
+        ]);
+
+        $paystack = \Mockery::mock(PaystackService::class);
+        $paystack->shouldReceive('verifyTransaction')->once()->andReturn([
+            'success' => true,
+            'data' => [
+                'status' => 'success',
+                'amount' => 100,
+                'reference' => 'HBS_AMOUNT_MISMATCH',
+            ],
+        ]);
+        $this->app->instance(PaystackService::class, $paystack);
+
+        $token = $customer->createToken('amount-mismatch', ['customer'])->plainTextToken;
+        $this->withToken($token)
+            ->postJson('/api/v1/customer/purchases/HBS_AMOUNT_MISMATCH/verify-paystack')
+            ->assertOk()
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('status', 'failed');
+
+        $this->assertSame('failed', Payment::where('reference', 'HBS_AMOUNT_MISMATCH')->value('status'));
+        $this->assertSame('pending', $purchase->fresh()->status);
+        Queue::assertNothingPushed();
     }
 
     public function test_customer_cannot_bypass_router_payment_gateway_setting(): void

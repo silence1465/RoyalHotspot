@@ -7,10 +7,21 @@ const emptyIsp = () => ({
   wan_interface: '',
   gateway: '',
   routing_table: 'main',
+  connection_mark: '',
   monthly_capacity_gb: '',
   subscriber_limit: '',
   priority: 100,
   enabled: true,
+  session_monitoring_enabled: false,
+  session_protection_enabled: false,
+  stale_cleanup_enabled: false,
+  emergency_cleanup_enabled: false,
+  session_soft_limit: 800,
+  session_hard_limit: 1000,
+  session_emergency_limit: 1100,
+  max_tcp_sessions_per_client: '',
+  max_udp_sessions_per_client: '',
+  max_total_sessions_per_client: '',
 });
 
 const emptyForm = {
@@ -275,6 +286,9 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
                   <Field label="Routing table" error={fieldError(`isps.${index}.routing_table`)}>
                     <input required className="input" placeholder="e.g. to-telecel" value={isp.routing_table} onChange={(e) => handleIspChange(index, 'routing_table', e.target.value.trim())} />
                   </Field>
+                  <Field label="Connection mark" error={fieldError(`isps.${index}.connection_mark`)}>
+                    <input className="input" placeholder="e.g. royal-mtn" value={isp.connection_mark || ''} onChange={(e) => handleIspChange(index, 'connection_mark', e.target.value.trim())} />
+                  </Field>
                   <Field label="Monthly capacity (GB)" error={fieldError(`isps.${index}.monthly_capacity_gb`)}>
                     <input type="number" min="0.001" step="0.001" className="input" placeholder="Unlimited if blank" value={isp.monthly_capacity_gb} onChange={(e) => handleIspChange(index, 'monthly_capacity_gb', e.target.value)} />
                   </Field>
@@ -284,6 +298,45 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
                   <Field label="Priority" error={fieldError(`isps.${index}.priority`)}>
                     <input type="number" min="1" step="1" required className="input" value={isp.priority} onChange={(e) => handleIspChange(index, 'priority', Number(e.target.value))} />
                   </Field>
+                </div>
+                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                  <label className="flex items-start gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={Boolean(isp.session_monitoring_enabled)}
+                      onChange={(e) => handleIspChange(index, 'session_monitoring_enabled', e.target.checked)}
+                    />
+                    <span>
+                      Monitor estimated WAN concurrent sessions
+                      <span className="block text-xs text-slate-400">Counts TCP and UDP entries carrying this ISP's RouterOS connection mark.</span>
+                    </span>
+                  </label>
+                  {isp.session_monitoring_enabled && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <Field label="Soft warning" error={fieldError(`isps.${index}.session_soft_limit`)}>
+                        <input type="number" min="1" className="input" value={isp.session_soft_limit ?? ''} onChange={(e) => handleIspChange(index, 'session_soft_limit', e.target.value)} />
+                      </Field>
+                      <Field label="Hard limit" error={fieldError(`isps.${index}.session_hard_limit`)}>
+                        <input type="number" min="2" className="input" value={isp.session_hard_limit ?? ''} onChange={(e) => handleIspChange(index, 'session_hard_limit', e.target.value)} />
+                      </Field>
+                      <Field label="Emergency limit" error={fieldError(`isps.${index}.session_emergency_limit`)}>
+                        <input type="number" min="3" className="input" value={isp.session_emergency_limit ?? ''} onChange={(e) => handleIspChange(index, 'session_emergency_limit', e.target.value)} />
+                      </Field>
+                    </div>
+                  )}
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    {[
+                      ['session_protection_enabled', 'Protect new sessions'],
+                      ['stale_cleanup_enabled', 'Safe stale cleanup'],
+                      ['emergency_cleanup_enabled', 'Emergency cleanup'],
+                    ].map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 text-xs text-slate-400" title="Locked until this connection mark is validated on the physical router">
+                        <input type="checkbox" disabled checked={Boolean(isp[key])} readOnly />
+                        {label} (validation required)
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
             ))}

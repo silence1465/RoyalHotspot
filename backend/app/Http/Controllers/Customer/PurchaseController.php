@@ -13,6 +13,7 @@ use App\Models\SystemSetting;
 use App\Services\CapacityService;
 use App\Services\CheckoutFeeService;
 use App\Services\PaymentMatchingService;
+use App\Services\PaystackPaymentVerifier;
 use App\Services\PaystackService;
 use App\Services\PurchaseService;
 use Illuminate\Http\Request;
@@ -332,6 +333,17 @@ class PurchaseController extends Controller
             'message' => $result['message'],
             'status' => $purchase->fresh()->status,
         ]);
+    }
+
+    public function verifyPaystack(Request $request, string $reference, PaystackPaymentVerifier $verifier)
+    {
+        $result = $verifier->verify($reference, $request->user()->id);
+
+        if (! $result['found']) {
+            return response()->json(['message' => 'Paystack purchase not found.'], 404);
+        }
+
+        return response()->json($result);
     }
 
     protected function findOwned(Request $request, string $reference): ?Purchase
