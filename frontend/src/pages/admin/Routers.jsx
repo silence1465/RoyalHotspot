@@ -138,20 +138,21 @@ export default function AdminRouters() {
               <th className="px-5 py-3 font-medium">WireGuard IP</th>
               <th className="px-5 py-3 font-medium">Port</th>
               <th className="px-5 py-3 font-medium">Status</th>
+              <th className="px-5 py-3 font-medium">Topology</th>
               <th className="px-5 py-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={6} className="px-5 py-6 text-center text-slate-400">
+                <td colSpan={7} className="px-5 py-6 text-center text-slate-400">
                   Loading…
                 </td>
               </tr>
             )}
             {!loading && routers.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-5 py-6 text-center text-slate-400">
+                <td colSpan={7} className="px-5 py-6 text-center text-slate-400">
                   No routers yet — add one to get started.
                 </td>
               </tr>
@@ -174,6 +175,13 @@ export default function AdminRouters() {
                       <p className={`text-xs mt-1 ${portalResult.success ? 'text-emerald-600' : 'text-red-600'}`}>
                         {portalResult.message}
                       </p>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-xs text-slate-600">
+                    <p>RouterOS {router.routeros_version || 'not set'}</p>
+                    <p className="mt-1">{router.isps?.filter((isp) => isp.enabled).length || 0} active ISP(s)</p>
+                    {router.isps?.filter((isp) => isp.enabled).length > 1 && (
+                      <p className="mt-1">Failover: {router.isp_failover_enabled ? (router.isp_failback_enabled ? 'auto + return' : 'automatic') : 'off'}</p>
                     )}
                   </td>
                   <td className="px-5 py-3">

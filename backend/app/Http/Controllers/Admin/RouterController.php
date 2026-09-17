@@ -9,6 +9,8 @@ use App\Models\Router;
 use App\Services\MikrotikService;
 use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class RouterController extends Controller
 {
@@ -30,7 +32,7 @@ class RouterController extends Controller
         }
 
         return response()->json(
-            $query->latest()->paginate($request->integer('per_page', 10))
+            $query->with('isps')->latest()->paginate($request->integer('per_page', 10))
         );
     }
 
@@ -42,16 +44,24 @@ class RouterController extends Controller
         $data['status'] = $data['status'] ?? 'offline';
         $data['connection_mode'] = $data['connection_mode'] ?? 'live';
 
-        $router = Router::create($data);
+        $router = DB::transaction(function () use ($data) {
+            $isps = $data['isps'] ?? [];
+            unset($data['isps']);
+
+            $router = Router::create($data);
+            $this->syncIsps($router, $isps);
+
+            return $router;
+        });
 
         ActivityLog::record('router.created', "Router '{$router->name}' created.", ['user_id' => $request->user()->id]);
 
-        return response()->json($router, 201);
+        return response()->json($router->load('isps'), 201);
     }
 
     public function show(Router $router)
     {
-        return response()->json($router);
+        return response()->json($router->load('isps'));
     }
 
     public function update(RouterRequest $request, Router $router)
@@ -67,11 +77,21 @@ class RouterController extends Controller
             unset($data['provisioning_api_password']);
         }
 
-        $router->update($data);
+        DB::transaction(function () use ($router, $data) {
+            $hasIspPayload = array_key_exists('isps', $data);
+            $isps = $data['isps'] ?? [];
+            unset($data['isps']);
+
+            $router->update($data);
+
+            if ($hasIspPayload) {
+                $this->syncIsps($router, $isps);
+            }
+        });
 
         ActivityLog::record('router.updated', "Router '{$router->name}' updated.", ['user_id' => $request->user()->id]);
 
-        return response()->json($router->fresh());
+        return response()->json($router->fresh()->load('isps'));
     }
 
     public function destroy(Request $request, Router $router)
@@ -205,5 +225,36 @@ class RouterController extends Controller
             'success' => true,
             'message' => 'Guest portal set up successfully. Test it by connecting a device to this hotspot.',
         ]);
+    }
+
+    private function syncIsps(Router $router, array $isps): void
+    {
+        $existingIds = $router->isps()->pluck('id')->all();
+        $keptIds = [];
+
+        foreach ($isps as $index => $isp) {
+            $id = $isp['id'] ?? null;
+            $monthlyCapacityGb = $isp['monthly_capacity_gb'] ?? null;
+            unset($isp['id'], $isp['monthly_capacity_gb']);
+
+            $isp['monthly_capacity_bytes'] = filled($monthlyCapacityGb)
+                ? (int) round((float) $monthlyCapacityGb * 1024 * 1024 * 1024)
+                : null;
+
+            if ($id) {
+                if (! in_array((int) $id, $existingIds, true)) {
+                    throw ValidationException::withMessages([
+                        "isps.{$index}.id" => ['This ISP does not belong to the selected router.'],
+                    ]);
+                }
+
+                $router->isps()->whereKey($id)->update($isp);
+                $keptIds[] = (int) $id;
+            } else {
+                $keptIds[] = $router->isps()->create($isp)->id;
+            }
+        }
+
+        $router->isps()->whereNotIn('id', $keptIds)->delete();
     }
 }

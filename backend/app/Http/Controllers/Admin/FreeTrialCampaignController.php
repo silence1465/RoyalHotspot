@@ -12,9 +12,11 @@ use Illuminate\Http\Request;
 
 class FreeTrialCampaignController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         return FreeTrialCampaign::with(['package:id,name,duration_value,duration_unit', 'router:id,name,location,connection_mode'])
+            ->when($request->attributes->get('admin_router_ids') !== null,
+                fn ($query) => $query->whereIn('router_id', $request->attributes->get('admin_router_ids')))
             ->withCount('purchases')
             ->latest()->get();
     }
@@ -22,6 +24,7 @@ class FreeTrialCampaignController extends Controller
     public function store(Request $request)
     {
         $campaign = FreeTrialCampaign::create($this->validated($request));
+
         return response()->json($campaign->load(['package', 'router']), 201);
     }
 

@@ -4,12 +4,17 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
+use App\Models\Purchase;
+use App\Models\RouterIsp;
 use App\Models\SystemSetting;
 use Illuminate\Http\Request;
 
 class SettingController extends Controller
 {
+    private const OPERATING_MODES = ['normal', 'data_cap', 'user_cap'];
+
     private const MASKED_SECRET = '••••••••';
+
     /**
      * The known, editable settings — anything outside this list is
      * silently ignored on update() rather than allowing arbitrary
@@ -88,13 +93,15 @@ class SettingController extends Controller
         }
 
         foreach ($validated as $key => $value) {
-            if ($key === 'telegram_bot_token' && $value === self::MASKED_SECRET) continue;
+            if ($key === 'telegram_bot_token' && $value === self::MASKED_SECRET) {
+                continue;
+            }
             SystemSetting::set($key, $value);
         }
 
         ActivityLog::record(
             'settings.updated',
-            'System settings updated: ' . implode(', ', array_keys($validated)),
+            'System settings updated: '.implode(', ', array_keys($validated)),
             ['user_id' => $request->user()->id]
         );
 
@@ -109,6 +116,53 @@ class SettingController extends Controller
         }
 
         return response()->json($settings);
+    }
+
+    public function operatingMode()
+    {
+        $mode = (string) SystemSetting::get('operating_mode', 'normal');
+
+        return response()->json([
+            'mode' => in_array($mode, self::OPERATING_MODES, true) ? $mode : 'normal',
+            'scope' => 'system',
+            'available_modes' => self::OPERATING_MODES,
+        ]);
+    }
+
+    public function updateOperatingMode(Request $request)
+    {
+        $data = $request->validate([
+            'mode' => ['required', 'string', 'in:'.implode(',', self::OPERATING_MODES)],
+        ]);
+
+        abort_unless($request->user()->isSuperAdmin(), 403, 'Only a super administrator can change system operating mode.');
+        if ($data['mode'] !== 'normal' && ! RouterIsp::where('enabled', true)
+            ->whereNotNull('monthly_capacity_bytes')->where('monthly_capacity_bytes', '>', 0)->exists()) {
+            return response()->json([
+                'message' => 'Configure at least one enabled ISP with monthly capacity before enabling this mode.',
+            ], 422);
+        }
+        if ($data['mode'] === 'user_cap' && ! RouterIsp::where('enabled', true)
+            ->whereNotNull('subscriber_limit')->where('subscriber_limit', '>', 0)->exists()) {
+            return response()->json([
+                'message' => 'Configure a subscriber limit on at least one enabled ISP before enabling User Cap mode.',
+            ], 422);
+        }
+        if ($data['mode'] !== 'normal' && Purchase::active()->whereNull('router_isp_id')->exists()) {
+            return response()->json([
+                'message' => 'Capacity mode cannot be enabled while existing active purchases have no ISP allocation. Let them expire or migrate them first.',
+            ], 422);
+        }
+
+        SystemSetting::set('operating_mode', $data['mode']);
+
+        ActivityLog::record(
+            'settings.operating_mode_updated',
+            "Operating mode changed to {$data['mode']}.",
+            ['user_id' => $request->user()->id]
+        );
+
+        return response()->json(['mode' => $data['mode']]);
     }
 
     private function gatewayEnabled(string $gateway): bool

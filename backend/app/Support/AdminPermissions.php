@@ -7,6 +7,7 @@ class AdminPermissions
     public const ALL = [
         'dashboard.view',
         'customers.view',
+        'customers.manage',
         'transactions.paystack.view',
         'transactions.momo.view',
         'bandwidth.view',

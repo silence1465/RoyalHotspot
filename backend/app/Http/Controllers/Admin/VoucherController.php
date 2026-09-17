@@ -10,6 +10,7 @@ use App\Models\Router;
 use App\Models\SystemSetting;
 use App\Models\Voucher;
 use App\Services\MikrotikService;
+use App\Services\VoucherUsageSyncService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -22,16 +23,20 @@ class VoucherController extends Controller
      * (SystemSetting), not hardcoded, per the spec's own instruction on
      * package prices/durations — same principle applies here.
      */
-    public function inventory()
+    public function inventory(Request $request)
     {
+        $ids = $request->attributes->get('admin_router_ids');
         $counts = Voucher::selectRaw('package_id, status, count(*) as count')
+            ->when($ids !== null, fn ($query) => $query->whereIn('router_id', $ids))
             ->groupBy('package_id', 'status')
             ->get()
             ->groupBy('package_id');
 
         $threshold = (int) (SystemSetting::get('low_stock_threshold') ?? 10);
 
-        $packages = InternetPackage::active()->get(['id', 'name']);
+        $packages = InternetPackage::active()
+            ->when($ids !== null, fn ($query) => $query->whereHas('routerProfiles', fn ($profiles) => $profiles->whereIn('router_id', $ids)))
+            ->get(['id', 'name']);
 
         $inventory = $packages->map(function ($package) use ($counts, $threshold) {
             $byStatus = ($counts->get($package->id) ?? collect())->pluck('count', 'status');
@@ -59,6 +64,10 @@ class VoucherController extends Controller
     public function index(Request $request)
     {
         $query = Voucher::with(['package:id,name', 'router:id,name', 'usedBy:id,full_name,username']);
+        $ids = $request->attributes->get('admin_router_ids');
+        if ($ids !== null) {
+            $query->whereIn('router_id', $ids);
+        }
 
         if ($status = $request->query('status')) {
             $query->where('status', $status);
@@ -141,6 +150,7 @@ class VoucherController extends Controller
 
             if (! $result['success']) {
                 $failed++;
+
                 continue; // don't create a DB row for a code that was never actually created on the router
             }
 
@@ -158,8 +168,8 @@ class VoucherController extends Controller
 
         ActivityLog::record(
             'voucher.generated',
-            'Generated ' . count($created) . " voucher(s) live on '{$router->name}' for package #{$data['package_id']} (batch {$batchId})"
-                . ($failed > 0 ? ", {$failed} failed" : '') . '.',
+            'Generated '.count($created)." voucher(s) live on '{$router->name}' for package #{$data['package_id']} (batch {$batchId})"
+                .($failed > 0 ? ", {$failed} failed" : '').'.',
             ['user_id' => $request->user()->id]
         );
 
@@ -199,7 +209,7 @@ class VoucherController extends Controller
      * this is exactly the safe way to validate the router/code-matching
      * assumption against one real voucher before ever enabling bulk sync.
      */
-    public function checkMikrotikStatus(Voucher $voucher, \App\Services\VoucherUsageSyncService $syncService)
+    public function checkMikrotikStatus(Voucher $voucher, VoucherUsageSyncService $syncService)
     {
         $result = $syncService->checkVoucher($voucher);
 

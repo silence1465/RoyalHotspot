@@ -45,6 +45,9 @@ class AdminUserController extends Controller
     public function update(Request $request, User $admin)
     {
         $data = $this->validateAdmin($request, $admin);
+        abort_if((int) $request->user()->id === (int) $admin->id
+            && ($data['role'] !== 'super_admin' || $data['status'] !== 'active'), 422,
+            'You cannot deactivate or demote your own super administrator account.');
         DB::transaction(function () use ($admin, $data) {
             $values = collect($data)->only(['name', 'email', 'phone', 'role', 'status'])->all();
             $values['permissions'] = $data['role'] === 'super_admin' ? [] : $data['permissions'];
@@ -53,6 +56,9 @@ class AdminUserController extends Controller
             }
             $admin->update($values);
             $admin->routers()->sync($data['role'] === 'super_admin' ? [] : $data['router_ids']);
+            if ($data['status'] !== 'active' || ! empty($data['password'])) {
+                $admin->tokens()->delete();
+            }
         });
 
         return response()->json($admin->fresh()->load('routers:id,name,location'));

@@ -17,6 +17,7 @@ class ExpirePurchases extends Command
     {
         $expiredPending = 0;
         $expiredActive = 0;
+        $failures = 0;
 
         // 1. Stale pending/processing purchases that never got paid
         Purchase::pendingExpiry()
@@ -29,12 +30,14 @@ class ExpirePurchases extends Command
 
         // 2. Active purchases (live or voucher-fulfilled) whose time ran out
         Purchase::expiring()
-            ->chunkById(100, function ($purchases) use ($purchaseService, &$expiredActive) {
+            ->chunkById(100, function ($purchases) use ($purchaseService, &$expiredActive, &$failures) {
                 foreach ($purchases as $purchase) {
                     try {
                         $purchaseService->expirePurchase($purchase);
                         $expiredActive++;
                     } catch (Throwable $exception) {
+                        $failures++;
+                        report($exception);
                         $this->warn("Purchase {$purchase->reference} could not be enforced and will be retried: {$exception->getMessage()}");
                     }
                 }
@@ -42,6 +45,6 @@ class ExpirePurchases extends Command
 
         $this->info("Expired {$expiredPending} unpaid purchase(s), {$expiredActive} active subscription(s).");
 
-        return self::SUCCESS;
+        return $failures ? self::FAILURE : self::SUCCESS;
     }
 }

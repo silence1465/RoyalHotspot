@@ -19,6 +19,11 @@ class LogController extends Controller
     public function smsLogs(Request $request)
     {
         $query = PaymentSmsLog::with('matchedOrder:id,reference,customer_id');
+        abort_unless($request->user()->hasPermission('transactions.momo.view'), 403);
+        $ids = $request->attributes->get('admin_router_ids');
+        if ($ids !== null) {
+            $query->whereHas('matchedPurchase', fn ($purchase) => $purchase->whereIn('router_id', $ids));
+        }
 
         if ($status = $request->query('status')) {
             $query->where('verification_status', $status);
@@ -40,6 +45,11 @@ class LogController extends Controller
     public function mikrotikLogs(Request $request)
     {
         $query = MikrotikLog::with('router:id,name');
+        abort_unless($request->user()->hasPermission('logs.view'), 403);
+        $ids = $request->attributes->get('admin_router_ids');
+        if ($ids !== null) {
+            $query->whereIn('router_id', $ids);
+        }
 
         if ($routerId = $request->query('router_id')) {
             $query->where('router_id', $routerId);
@@ -71,6 +81,7 @@ class LogController extends Controller
 
     public function activityLogs(Request $request)
     {
+        abort_unless($request->user()->isSuperAdmin(), 403, 'Global activity logs require a super administrator.');
         $query = ActivityLog::with(['user:id,name', 'customer:id,full_name,username']);
 
         if ($userId = $request->query('user_id')) {

@@ -262,6 +262,47 @@ class MikrotikService
         });
     }
 
+    /** Disconnect a user, clear saved logins, then replace the password by exact username. */
+    public function resetHotspotUserPassword(string $username, string $password): array
+    {
+        return $this->run('reset-hotspot-user-password', function (Client $client) use ($username, $password) {
+            $users = $this->checkedQuery($client,
+                (new Query('/ip/hotspot/user/print'))->where('name', $username)
+            );
+            $user = collect($users)->first(
+                fn (array $candidate) => ($candidate['name'] ?? null) === $username && ! empty($candidate['.id'])
+            );
+            if (! $user) {
+                throw new \RuntimeException("MikroTik hotspot user {$username} was not found.");
+            }
+
+            $sessions = $this->checkedQuery($client,
+                (new Query('/ip/hotspot/active/print'))->where('user', $username)
+            );
+            $disconnected = 0;
+            foreach ($sessions as $session) {
+                if (! empty($session['.id']) && ($session['user'] ?? null) === $username) {
+                    $this->checkedQuery($client,
+                        (new Query('/ip/hotspot/active/remove'))->equal('.id', $session['.id'])
+                    );
+                    $disconnected++;
+                }
+            }
+            $removedCookies = $this->removeCookiesForUser($client, $username);
+            $this->checkedQuery($client,
+                (new Query('/ip/hotspot/user/set'))
+                    ->equal('.id', $user['.id'])
+                    ->equal('password', $password)
+            );
+
+            return [
+                'mikrotik_user_id' => $user['.id'],
+                'disconnected_sessions' => $disconnected,
+                'removed_cookies' => $removedCookies,
+            ];
+        });
+    }
+
     /** Apply a per-user rate and reconnect active sessions so it takes effect now. */
     public function setUserRateAndReconnect(string $id, string $username, string $rateLimit): array
     {
@@ -653,35 +694,32 @@ class MikrotikService
     {
         return $this->run(
             'disable-and-disconnect-hotspot-user',
-            function (Client $client) use ($username, $mikrotikUserId) {
-                $userId = $mikrotikUserId;
-
-                if (! $userId) {
-                    $users = $client->query(
-                        (new Query('/ip/hotspot/user/print'))->where('name', $username)
-                    )->read();
-                    $userId = $users[0]['.id'] ?? null;
-                }
+            function (Client $client) use ($username) {
+                // IDs may be stale after a router restore. Resolve ownership by name.
+                $users = $this->checkedQuery($client,
+                    (new Query('/ip/hotspot/user/print'))->where('name', $username)
+                );
+                $userId = collect($users)->first(fn ($user) => ($user['name'] ?? null) === $username)['.id'] ?? null;
 
                 if ($userId) {
-                    $client->query(
+                    $this->checkedQuery($client,
                         (new Query('/ip/hotspot/user/disable'))->equal('.id', $userId)
-                    )->read();
+                    );
                 }
 
-                $sessions = $client->query(
+                $sessions = $this->checkedQuery($client,
                     (new Query('/ip/hotspot/active/print'))->where('user', $username)
-                )->read();
+                );
 
                 $disconnected = 0;
                 foreach ($sessions as $session) {
-                    if (empty($session['.id'])) {
+                    if (empty($session['.id']) || ($session['user'] ?? null) !== $username) {
                         continue;
                     }
 
-                    $client->query(
+                    $this->checkedQuery($client,
                         (new Query('/ip/hotspot/active/remove'))->equal('.id', $session['.id'])
-                    )->read();
+                    );
                     $disconnected++;
                 }
 
@@ -703,16 +741,16 @@ class MikrotikService
         return $this->run(
             'disconnect-and-clear-hotspot-cookies',
             function (Client $client) use ($username, $macAddress) {
-                $sessions = $client->query(
+                $sessions = $this->checkedQuery($client,
                     (new Query('/ip/hotspot/active/print'))->where('user', $username)
-                )->read();
+                );
 
                 $disconnected = 0;
                 foreach ($sessions as $session) {
-                    if (empty($session['.id'])) {
+                    if (empty($session['.id']) || ($session['user'] ?? null) !== $username) {
                         continue;
                     }
-                    $client->query((new Query('/ip/hotspot/active/remove'))->equal('.id', $session['.id']))->read();
+                    $this->checkedQuery($client, (new Query('/ip/hotspot/active/remove'))->equal('.id', $session['.id']));
                     $disconnected++;
                 }
 
@@ -727,25 +765,35 @@ class MikrotikService
 
     protected function removeCookiesForUser(Client $client, string $username, ?string $macAddress = null): int
     {
-        $cookies = $client->query(
+        $cookies = $this->checkedQuery($client,
             (new Query('/ip/hotspot/cookie/print'))->where('user', $username)
-        )->read();
+        );
         $normalizedMac = $macAddress ? strtoupper(str_replace('-', ':', $macAddress)) : null;
         $removed = 0;
 
         foreach ($cookies as $cookie) {
-            if (empty($cookie['.id'])) {
+            if (empty($cookie['.id']) || ($cookie['user'] ?? null) !== $username) {
                 continue;
             }
             $cookieMac = strtoupper(str_replace('-', ':', (string) ($cookie['mac-address'] ?? '')));
             if ($normalizedMac && $cookieMac && $cookieMac !== $normalizedMac) {
                 continue;
             }
-            $client->query((new Query('/ip/hotspot/cookie/remove'))->equal('.id', $cookie['.id']))->read();
+            $this->checkedQuery($client, (new Query('/ip/hotspot/cookie/remove'))->equal('.id', $cookie['.id']));
             $removed++;
         }
 
         return $removed;
+    }
+
+    protected function checkedQuery(Client $client, Query $query): array
+    {
+        $response = $client->query($query)->read();
+        if ($error = $this->routerOsCommandError($response)) {
+            throw new \RuntimeException($error);
+        }
+
+        return $response;
     }
 
     /**

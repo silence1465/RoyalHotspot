@@ -20,6 +20,11 @@ export default function CustomerDashboard() {
   const [loading, setLoading] = useState(true);
   const [hasFreeInternet, setHasFreeInternet] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [showWifiPasswordForm, setShowWifiPasswordForm] = useState(false);
+  const [wifiPasswordForm, setWifiPasswordForm] = useState({ current_password: '', password: '', password_confirmation: '' });
+  const [wifiPasswordSaving, setWifiPasswordSaving] = useState(false);
+  const [wifiPasswordMessage, setWifiPasswordMessage] = useState('');
+  const [wifiPasswordError, setWifiPasswordError] = useState('');
   const [connection, setConnection] = useState({ status: '', message: '' });
   const [currentConnectionChecked, setCurrentConnectionChecked] = useState(
     !sessionStorage.getItem('portal_router_id')
@@ -171,6 +176,33 @@ export default function CustomerDashboard() {
     document.body.appendChild(form);
     form.submit(); */
   }, [prepareSecureConnection]);
+
+  const resetWifiPassword = async (event) => {
+    event.preventDefault();
+    setWifiPasswordSaving(true);
+    setWifiPasswordError('');
+    setWifiPasswordMessage('');
+    try {
+      const { data: result } = await api.post('/customer/profile/wifi-password', {
+        router_id: purchase.router.id,
+        ...wifiPasswordForm,
+      });
+      setData((current) => ({
+        ...current,
+        hotspot_credentials: { ...current.hotspot_credentials, password: result.password },
+      }));
+      setShowPassword(true);
+      setShowWifiPasswordForm(false);
+      setWifiPasswordForm({ current_password: '', password: '', password_confirmation: '' });
+      setWifiPasswordMessage(result.message);
+      setConnection({ status: '', message: '' });
+    } catch (error) {
+      const errors = error.response?.data?.errors || {};
+      setWifiPasswordError(errors.current_password?.[0] || errors.password?.[0] || error.response?.data?.message || 'Could not change your Wi-Fi password.');
+    } finally {
+      setWifiPasswordSaving(false);
+    }
+  };
 
   useEffect(() => {
     const sessionId = searchParams.get('confirm_session') || sessionStorage.getItem('hotspot_pending_session');
@@ -426,6 +458,57 @@ export default function CustomerDashboard() {
                       </button>
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowWifiPasswordForm((visible) => !visible);
+                      setWifiPasswordError('');
+                      setWifiPasswordMessage('');
+                    }}
+                    className="mt-3 text-xs font-medium text-indigo-600 hover:underline"
+                  >
+                    {showWifiPasswordForm ? 'Cancel password change' : 'Change Wi-Fi password'}
+                  </button>
+                  {showWifiPasswordForm && (
+                    <form onSubmit={resetWifiPassword} className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
+                      <input
+                        type="password"
+                        required
+                        className="input"
+                        autoComplete="current-password"
+                        placeholder="Dashboard password"
+                        value={wifiPasswordForm.current_password}
+                        onChange={(event) => setWifiPasswordForm((form) => ({ ...form, current_password: event.target.value }))}
+                      />
+                      <input
+                        type="password"
+                        required
+                        minLength={8}
+                        pattern="[A-Za-z0-9]+"
+                        className="input"
+                        autoComplete="new-password"
+                        placeholder="New Wi-Fi password"
+                        value={wifiPasswordForm.password}
+                        onChange={(event) => setWifiPasswordForm((form) => ({ ...form, password: event.target.value }))}
+                      />
+                      <input
+                        type="password"
+                        required
+                        minLength={8}
+                        pattern="[A-Za-z0-9]+"
+                        className="input"
+                        autoComplete="new-password"
+                        placeholder="Confirm Wi-Fi password"
+                        value={wifiPasswordForm.password_confirmation}
+                        onChange={(event) => setWifiPasswordForm((form) => ({ ...form, password_confirmation: event.target.value }))}
+                      />
+                      <button type="submit" disabled={wifiPasswordSaving} className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 sm:col-span-3">
+                        {wifiPasswordSaving ? 'Changing…' : 'Change password and disconnect sessions'}
+                      </button>
+                    </form>
+                  )}
+                  {wifiPasswordError && <p className="mt-2 text-xs text-red-600">{wifiPasswordError}</p>}
+                  {wifiPasswordMessage && <p className="mt-2 text-xs text-emerald-700">{wifiPasswordMessage}</p>}
                 </>
               ) : (
                 <>

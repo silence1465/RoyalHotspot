@@ -7,8 +7,9 @@ use App\Models\InternetPackage;
 use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\SystemSetting;
-use App\Services\PaymentMatchingService;
+use App\Services\CapacityService;
 use App\Services\CheckoutFeeService;
+use App\Services\PaymentMatchingService;
 use Illuminate\Http\Request;
 
 /**
@@ -52,6 +53,16 @@ class GuestPurchaseController extends Controller
 
         if (! $hasMapping) {
             return response()->json(['message' => 'This package is not available at that location.'], 422);
+        }
+
+        $capacity = app(CapacityService::class);
+        $availability = $capacity->availability($router, $package);
+        if (! $availability['available']) {
+            return response()->json([
+                'message' => $capacity->unavailableMessage($availability['reason']),
+                'capacity_available' => false,
+                'reason' => $availability['reason'],
+            ], 422);
         }
 
         $expiryMinutes = (int) (SystemSetting::get('order_expiry_minutes') ?? 60);
@@ -132,7 +143,7 @@ class GuestPurchaseController extends Controller
             return response()->json([
                 'success' => $purchase->isActive(),
                 'status' => $purchase->status,
-                'message' => 'This purchase is already ' . $purchase->status . '.',
+                'message' => 'This purchase is already '.$purchase->status.'.',
             ]);
         }
 

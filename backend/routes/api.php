@@ -179,6 +179,8 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/customers', [CustomerController::class, 'index'])->middleware('admin-permission:customers.view');
         Route::get('/customers/{customer}', [CustomerController::class, 'show'])->middleware('admin-permission:customers.view');
+        Route::post('/customers/{customer}/hotspot-users/{hotspotUser}/reset-password', [CustomerController::class, 'resetHotspotPassword'])
+            ->middleware(['admin-permission:customers.manage', 'mikrotik-unlocked']);
 
         // Unified purchases — replaces both /subscriptions and /orders
         Route::get('/purchases', [PurchaseController::class, 'index'])->middleware('admin-permission:transactions.paystack.view,transactions.momo.view');
@@ -219,8 +221,10 @@ Route::prefix('v1')->group(function () {
         Route::get('/reports/customers', [ReportController::class, 'customers'])->middleware('admin-permission:customers.view');
         Route::get('/reports/router-activity', [ReportController::class, 'routerActivity'])->middleware('mikrotik-unlocked');
 
-        Route::get('/settings', [SettingController::class, 'index'])->middleware('role:super_admin,admin');
-        Route::put('/settings', [SettingController::class, 'update'])->middleware('role:super_admin,admin');
+        Route::get('/settings', [SettingController::class, 'index'])->middleware('role:super_admin');
+        Route::put('/settings', [SettingController::class, 'update'])->middleware('role:super_admin');
+        Route::get('/operating-mode', [SettingController::class, 'operatingMode'])->middleware('role:super_admin,admin');
+        Route::put('/operating-mode', [SettingController::class, 'updateOperatingMode'])->middleware('role:super_admin,admin');
 
         Route::get('/complaints', [ComplaintController::class, 'index'])->middleware('admin-permission:complaints.view');
         Route::get('/complaints/{complaint}', [ComplaintController::class, 'show'])->middleware('admin-permission:complaints.view');
@@ -237,6 +241,8 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/dashboard', [App\Http\Controllers\Customer\DashboardController::class, 'index']);
         Route::put('/profile', [ProfileController::class, 'update']);
+        Route::post('/profile/wifi-password', [ProfileController::class, 'resetWifiPassword'])
+            ->middleware('throttle:wifi-password-reset');
         Route::post('/hotspot/sessions/prepare', [HotspotSessionController::class, 'prepare'])
             ->middleware('throttle:hotspot-connect');
         Route::get('/hotspot/sessions/current', [HotspotSessionController::class, 'current'])

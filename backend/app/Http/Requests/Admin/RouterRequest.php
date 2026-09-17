@@ -55,6 +55,19 @@ class RouterRequest extends FormRequest
             // pools, only references one by name.
             'address_pool' => ['nullable', 'string', 'max:255'],
             'hotspot_login_host' => ['nullable', 'string', 'max:255', 'regex:/^[A-Za-z0-9.-]+$/'],
+            'routeros_version' => ['nullable', 'string', 'max:32', 'regex:/^\d+(?:\.\d+){1,3}$/'],
+            'isp_failover_enabled' => ['sometimes', 'boolean'],
+            'isp_failback_enabled' => ['sometimes', 'boolean'],
+            'isps' => ['sometimes', 'array', 'max:16'],
+            'isps.*.id' => ['nullable', 'integer'],
+            'isps.*.name' => ['required', 'string', 'max:100', 'distinct:ignore_case'],
+            'isps.*.wan_interface' => ['required', 'string', 'max:100', 'distinct:ignore_case', 'regex:/^[A-Za-z0-9_.:+-]+$/'],
+            'isps.*.gateway' => ['required', 'ip'],
+            'isps.*.routing_table' => ['required', 'string', 'max:100', 'regex:/^[A-Za-z0-9_.-]+$/'],
+            'isps.*.monthly_capacity_gb' => ['nullable', 'numeric', 'min:0.001', 'max:1048576'],
+            'isps.*.subscriber_limit' => ['nullable', 'integer', 'min:1', 'max:1000000'],
+            'isps.*.priority' => ['required', 'integer', 'min:1', 'max:65535'],
+            'isps.*.enabled' => ['required', 'boolean'],
         ];
     }
 }

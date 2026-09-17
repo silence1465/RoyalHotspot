@@ -11,6 +11,7 @@ class ResolveAdminScope
     public function handle(Request $request, Closure $next): Response
     {
         $user = $request->user();
+        abort_unless($user && $user->status === 'active', 403, 'This administrator account is inactive.');
         $selected = (string) $request->header('X-Router-Id', 'all');
         $assignedIds = $user->isSuperAdmin()
             ? null

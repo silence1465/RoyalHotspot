@@ -58,7 +58,7 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('hotspot-connect', function ($request) {
-            return Limit::perMinute(12)->by(($request->user()?->id ?? 'guest') . '|' . $request->ip());
+            return Limit::perMinute(12)->by(($request->user()?->id ?? 'guest').'|'.$request->ip());
         });
 
         // Session confirmation is intentionally polled every two seconds by
@@ -67,6 +67,10 @@ class AppServiceProvider extends ServiceProvider
         // cannot rate-limit its own status checks.
         RateLimiter::for('hotspot-status', function ($request) {
             return Limit::perMinute(60)->by(($request->user()?->id ?? 'guest').'|'.$request->ip());
+        });
+
+        RateLimiter::for('wifi-password-reset', function ($request) {
+            return Limit::perHour(5)->by(($request->user()?->id ?? 'guest').'|'.$request->ip());
         });
 
         // SMS Forwarder webhook — already gated by a shared-secret token

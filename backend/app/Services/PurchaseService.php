@@ -9,6 +9,7 @@ use App\Models\HotspotSession;
 use App\Models\HotspotUser;
 use App\Models\Purchase;
 use App\Models\Voucher;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -29,7 +30,10 @@ use Illuminate\Support\Facades\DB;
  */
 class PurchaseService
 {
-    public function __construct(protected MikrotikServiceFactory $mikrotikFactory) {}
+    public function __construct(
+        protected MikrotikServiceFactory $mikrotikFactory,
+        protected ?CapacityService $capacityService = null
+    ) {}
 
     public function verifyAndFulfill(
         Purchase $purchase,
@@ -78,13 +82,28 @@ class PurchaseService
 
         if (! $forceActivate && $purchase->customer_id && $this->hasActiveOnSameRouter($purchase)) {
             if ($purchase->status !== 'queued') {
-                $purchase->update(['status' => 'queued']);
+                $purchase->update(['status' => 'queued', 'queue_reason' => 'active_subscription']);
                 ActivityLog::record(
                     'purchase.queued',
                     "Purchase {$purchase->reference} queued — customer already has an active purchase on this router.",
                     ['customer_id' => $purchase->customer_id]
                 );
             }
+
+            return $purchase->fresh();
+        }
+
+        $reservation = ($this->capacityService ??= app(CapacityService::class))->reserve($purchase);
+        if (! $reservation['reserved']) {
+            $purchase->update([
+                'status' => 'queued',
+                'queue_reason' => $reservation['reason'],
+            ]);
+            ActivityLog::record(
+                'purchase.capacity_queued',
+                "Purchase {$purchase->reference} queued because {$reservation['reason']} is unavailable.",
+                $purchase->customer_id ? ['customer_id' => $purchase->customer_id] : []
+            );
 
             return $purchase->fresh();
         }
@@ -125,9 +144,16 @@ class PurchaseService
         $activated = $this->fulfill($purchase, forceActivate: true);
 
         if ($activated->status === 'queued') {
+            $message = match ($activated->queue_reason) {
+                'data_capacity' => 'Data capacity is currently unavailable. This package will activate automatically when capacity becomes available.',
+                'subscriber_capacity' => 'Subscriber capacity is full. This package will activate automatically when a slot becomes available.',
+                'package_configuration' => 'This package has no capacity allowance configured. Please contact an administrator.',
+                default => 'No voucher is available for this package and location yet. Please contact an administrator.',
+            };
+
             return [
                 'success' => false,
-                'message' => 'No voucher is available for this package and location yet. Please contact an administrator.',
+                'message' => $message,
             ];
         }
 
@@ -315,7 +341,17 @@ class PurchaseService
 
     public function expirePurchase(Purchase $purchase): void
     {
+        Cache::lock("hotspot-connect:{$purchase->customer_id}:{$purchase->router_id}", 120)
+            ->block(5, fn () => $this->expireLocked($purchase));
+    }
+
+    protected function expireLocked(Purchase $purchase): void
+    {
         DB::transaction(function () use ($purchase) {
+            $purchase = Purchase::whereKey($purchase->id)->lockForUpdate()->firstOrFail();
+            if ($purchase->status === 'expired') {
+                return;
+            }
             $purchase->update(['status' => 'expired']);
 
             HotspotSession::where('purchase_id', $purchase->id)
@@ -326,7 +362,13 @@ class PurchaseService
                     'ended_at' => now(),
                 ]);
 
-            if ($purchase->fulfillment_type === 'live' && $purchase->router_id) {
+            $hasReplacementAccess = $purchase->customer_id && Purchase::where('customer_id', $purchase->customer_id)
+                ->where('router_id', $purchase->router_id)
+                ->where('id', '!=', $purchase->id)
+                ->where('fulfillment_type', 'live')->active()
+                ->whereNotNull('starts_at')->where('expires_at', '>', now())->exists();
+
+            if ($purchase->fulfillment_type === 'live' && $purchase->router_id && ! $hasReplacementAccess) {
                 $hotspotUser = $purchase->customer_id
                     ? HotspotUser::where('customer_id', $purchase->customer_id)
                         ->where('router_id', $purchase->router_id)
@@ -369,7 +411,7 @@ class PurchaseService
             if ($purchase->fulfillment_type === 'voucher' && $purchase->voucher_id) {
                 $voucher = $purchase->voucher;
 
-                if ($voucher && $voucher->mikrotik_user_id && $purchase->router_id) {
+                if ($voucher && $purchase->router_id && ! $purchase->router->isManual()) {
                     $mikrotik = $this->mikrotikFactory->make($purchase->router);
                     $result = $mikrotik->disableAndDisconnectHotspotUser(
                         $voucher->code,
@@ -402,8 +444,8 @@ class PurchaseService
                     ->oldest()
                     ->first();
 
-                if ($nextQueued) {
-                    $this->fulfill($nextQueued, forceActivate: true);
+                if ($nextQueued && ! $this->hasActiveOnSameRouter($nextQueued)) {
+                    $this->fulfill($nextQueued);
                 }
             }
         });

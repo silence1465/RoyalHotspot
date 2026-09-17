@@ -17,9 +17,12 @@ class HotspotSessionController extends Controller
             'router_id' => ['required', 'integer', 'exists:routers,id'],
         ]);
 
-        return response()->json(
-            $service->current($request->user(), (int) $validated['router_id'])
-        );
+        try {
+            return response()->json($service->current($request->user(), (int) $validated['router_id']));
+        } catch (LockTimeoutException) {
+            return response()->json(['connected' => null, 'status' => 'unknown', 'session' => null,
+                'message' => 'A connection update is in progress. Please retry shortly.']);
+        }
     }
 
     public function prepare(PrepareHotspotSessionRequest $request, HotspotSessionService $service)
@@ -48,7 +51,15 @@ class HotspotSessionController extends Controller
             ->with('router')
             ->firstOrFail();
 
-        $sessionModel = $service->confirm($request->user(), $sessionModel);
+        try {
+            $sessionModel = $service->confirm($request->user(), $sessionModel);
+        } catch (LockTimeoutException) {
+            return response()->json(['message' => 'A connection update is in progress. Please retry shortly.'], 409);
+        } catch (\RuntimeException $exception) {
+            report($exception);
+
+            return response()->json(['message' => 'Could not confirm the hotspot connection. Please retry shortly.'], 502);
+        }
 
         return response()->json([
             'session_id' => $sessionModel->public_id,

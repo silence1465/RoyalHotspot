@@ -18,19 +18,28 @@ class SearchController extends Controller
             return response()->json(['customers' => [], 'purchases' => [], 'vouchers' => []]);
         }
 
-        $customers = Customer::where('full_name', 'like', "%{$q}%")
+        $ids = $request->attributes->get('admin_router_ids');
+        $user = $request->user();
+        $methods = array_values(array_filter(['paystack', 'momo'], fn ($method) => $user->hasPermission("transactions.{$method}.view")));
+        $customers = Customer::where(fn ($query) => $query->where('full_name', 'like', "%{$q}%")
             ->orWhere('phone', 'like', "%{$q}%")
-            ->orWhere('username', 'like', "%{$q}%")
+            ->orWhere('username', 'like', "%{$q}%"))
+            ->when(! $user->hasPermission('customers.view'), fn ($query) => $query->whereRaw('1 = 0'))
+            ->when($ids !== null, fn ($query) => $query->whereHas('purchases', fn ($p) => $p->whereIn('router_id', $ids)))
             ->limit(5)
             ->get(['id', 'full_name', 'phone', 'username']);
 
-        $purchases = Purchase::where('reference', 'like', "%{$q}%")
-            ->orWhere('momo_transaction_id', 'like', "%{$q}%")
+        $purchases = Purchase::where(fn ($query) => $query->where('reference', 'like', "%{$q}%")
+            ->orWhere('momo_transaction_id', 'like', "%{$q}%"))
+            ->when(! $user->isSuperAdmin(), fn ($query) => $query->whereIn('payment_method', $methods))
+            ->when($ids !== null, fn ($query) => $query->whereIn('router_id', $ids))
             ->with('customer:id,full_name')
             ->limit(5)
             ->get(['id', 'customer_id', 'reference', 'status', 'amount']);
 
         $vouchers = Voucher::where('code', 'like', "%{$q}%")
+            ->when(! $user->hasPermission('vouchers.view'), fn ($query) => $query->whereRaw('1 = 0'))
+            ->when($ids !== null, fn ($query) => $query->whereIn('router_id', $ids))
             ->limit(5)
             ->get(['id', 'code', 'status']);
 

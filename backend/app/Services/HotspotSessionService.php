@@ -8,6 +8,7 @@ use App\Models\HotspotUser;
 use App\Models\Purchase;
 use App\Models\Router;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -33,7 +34,7 @@ class HotspotSessionService
 
         $this->validateLoginUrl($router, $loginUrl);
 
-        $lock = Cache::lock("hotspot-connect:{$customer->id}:{$router->id}", 20);
+        $lock = Cache::lock("hotspot-connect:{$customer->id}:{$router->id}", 120);
 
         return $lock->block(5, function () use ($customer, $router, $loginUrl, $macAddress, $ipAddress) {
             $purchase = $this->eligiblePurchase($customer, $router->id);
@@ -58,6 +59,24 @@ class HotspotSessionService
 
             [$username, $password] = $this->credentialsFor($purchase);
 
+            $pending = HotspotSession::where('customer_id', $customer->id)
+                ->where('router_id', $router->id)
+                ->where('purchase_id', $purchase->id)
+                ->where('status', 'connecting')
+                ->where('created_at', '>=', now()->subMinute())
+                ->latest('id')->first();
+            if ($pending) {
+                if ($pending->mac_address !== $this->normalizeMac($macAddress) || $pending->ip_address !== $ipAddress) {
+                    throw ValidationException::withMessages(['connection' => 'A connection is already being established on another device. Please wait.']);
+                }
+
+                return [
+                    'session_id' => $pending->public_id, 'status' => 'connecting',
+                    'login_url' => $loginUrl, 'username' => $username,
+                    'password' => $password, 'connected' => false,
+                ];
+            }
+
             $mikrotik = $this->mikrotikFactory->make($router);
             $activeResult = $mikrotik->getActiveUsers();
             if (! $activeResult['success']) {
@@ -72,10 +91,6 @@ class HotspotSessionService
                 if (! $removeResult['success']) {
                     throw new \RuntimeException('Could not replace the previous hotspot session: '.($removeResult['error'] ?? 'unknown error'));
                 }
-            }
-
-            if ($purchase->isLive()) {
-                $purchase = app(PurchaseService::class)->activateLiveAccess($purchase);
             }
 
             HotspotSession::where('customer_id', $customer->id)
@@ -121,7 +136,9 @@ class HotspotSessionService
             return ['connected' => false, 'status' => 'disconnected', 'session' => null];
         }
 
-        return $this->currentForPurchase($customer, $router, $this->eligiblePurchase($customer, $routerId));
+        return Cache::lock("hotspot-connect:{$customer->id}:{$routerId}", 120)->block(5,
+            fn () => $this->currentForPurchase($customer, $router, $this->eligiblePurchase($customer, $routerId))
+        );
     }
 
     protected function currentForPurchase(Customer $customer, Router $router, ?Purchase $purchase): array
@@ -139,7 +156,7 @@ class HotspotSessionService
         }
 
         $sessionPurchase = $session->purchase;
-        $legitimate = $purchase
+        $legitimate = $customer->status !== 'suspended' && $purchase
             && (int) $session->purchase_id === (int) $purchase->id
             && $sessionPurchase
             && $sessionPurchase->isActive()
@@ -233,12 +250,38 @@ class HotspotSessionService
 
     public function confirm(Customer $customer, HotspotSession $session): HotspotSession
     {
+        abort_unless((int) $session->customer_id === (int) $customer->id, 404);
+
+        return Cache::lock("hotspot-connect:{$customer->id}:{$session->router_id}", 120)
+            ->block(5, fn () => $this->confirmLocked($customer, $session->fresh()));
+    }
+
+    protected function confirmLocked(Customer $customer, HotspotSession $session): HotspotSession
+    {
         if ($session->customer_id !== $customer->id) {
             abort(404);
         }
 
-        if ($session->status === 'active' || ! in_array($session->status, ['connecting'], true)) {
+        if (! in_array($session->status, ['connecting', 'active'], true)) {
             return $session;
+        }
+
+        $purchase = $this->eligiblePurchase($customer, $session->router_id);
+        if ($customer->status === 'suspended' || ! $purchase || (int) $purchase->id !== (int) $session->purchase_id) {
+            $result = $this->mikrotikFactory->make($session->router)
+                ->disconnectAndClearHotspotCookies($session->mikrotik_username, $session->mac_address);
+            if (! $result['success']) {
+                throw new \RuntimeException('Could not revoke the invalid hotspot connection. Please retry.');
+            }
+            $session->update(['status' => 'expired', 'disconnect_reason' => 'purchase_not_eligible', 'ended_at' => now()]);
+
+            return $session->fresh();
+        }
+
+        if ($session->status === 'active') {
+            $this->currentForPurchase($customer, $session->router, $purchase);
+
+            return $session->fresh();
         }
 
         if ($session->created_at->lt(now()->subMinute())) {
@@ -261,13 +304,22 @@ class HotspotSessionService
         );
 
         if ($match) {
-            $session->update([
-                'status' => 'active',
-                'mikrotik_session_id' => $match['.id'] ?? null,
-                'started_at' => now(),
-                'last_seen_at' => now(),
-                'failure_message' => null,
-            ]);
+            DB::transaction(function () use ($session, $purchase, $match) {
+                $locked = Purchase::whereKey($purchase->id)->lockForUpdate()->firstOrFail();
+                if (! $locked->isActive() || $locked->isExpiredByTime()) {
+                    throw new \RuntimeException('The package is no longer eligible for connection.');
+                }
+                if ($locked->isLive()) {
+                    app(PurchaseService::class)->activateLiveAccess($locked);
+                }
+                $session->update([
+                    'status' => 'active',
+                    'mikrotik_session_id' => $match['.id'] ?? null,
+                    'started_at' => now(),
+                    'last_seen_at' => now(),
+                    'failure_message' => null,
+                ]);
+            });
         }
 
         return $session->fresh();

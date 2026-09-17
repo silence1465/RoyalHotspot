@@ -41,6 +41,7 @@ export default function BuyInternet() {
   const selectedRouter = selected?.available_routers?.find((router) => String(router.id) === routerId);
   const availablePaymentMethods = selectedRouter?.payment_methods || paymentMethods;
   const hasAvailablePaymentMethod = availablePaymentMethods.momo || availablePaymentMethods.paystack;
+  const hasCapacity = selectedRouter?.capacity_available ?? true;
 
   useEffect(() => {
     api
@@ -158,12 +159,18 @@ export default function BuyInternet() {
             <p className="text-sm text-amber-700 mb-3">Payments are currently unavailable at this location.</p>
           )}
 
+          {routerId && (
+            <p className={`mb-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${hasCapacity ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+              {selectedRouter?.capacity_message || (hasCapacity ? 'Capacity available' : 'Capacity unavailable')}
+            </p>
+          )}
+
           {actionError && <p className="text-sm text-red-600 mb-3">{actionError}</p>}
 
           <div className="flex gap-2">
             <button
               onClick={() => setConfirming(true)}
-              disabled={processing || (selected.available_routers?.length > 1 && !routerId) || selected.available_routers?.length === 0 || (routerId && !hasAvailablePaymentMethod)}
+              disabled={processing || (selected.available_routers?.length > 1 && !routerId) || selected.available_routers?.length === 0 || (routerId && (!hasAvailablePaymentMethod || !hasCapacity))}
               className="bg-red-600 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-red-700 disabled:opacity-50"
             >
               Buy Now

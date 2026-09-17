@@ -10,10 +10,11 @@ use App\Models\Payment;
 use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\SystemSetting;
+use App\Services\CapacityService;
+use App\Services\CheckoutFeeService;
 use App\Services\PaymentMatchingService;
 use App\Services\PaystackService;
 use App\Services\PurchaseService;
-use App\Services\CheckoutFeeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -49,7 +50,7 @@ class PurchaseController extends Controller
 
         if (! filter_var(SystemSetting::get("{$paymentMethod}_enabled", '1'), FILTER_VALIDATE_BOOLEAN)) {
             return response()->json([
-                'message' => ucfirst($paymentMethod) . ' payments are currently unavailable. Please choose another payment method.',
+                'message' => ucfirst($paymentMethod).' payments are currently unavailable. Please choose another payment method.',
                 'errors' => ['payment_method' => ['This payment method is currently disabled.']],
             ], 422);
         }
@@ -79,6 +80,10 @@ class PurchaseController extends Controller
         $package = InternetPackage::findOrFail($validated['package_id']);
         $pricing = app(CheckoutFeeService::class)->calculate($package->price, 'paystack');
         $router = Router::findOrFail($validated['router_id']);
+
+        if ($unavailable = $this->capacityUnavailable($router, $package, $customer->id)) {
+            return $unavailable;
+        }
 
         $fulfillmentType = $router->isManual() ? 'voucher' : 'live';
 
@@ -169,6 +174,10 @@ class PurchaseController extends Controller
         // specific router chosen up front.
         $routerId = $validated['router_id'];
         $router = Router::findOrFail($routerId);
+
+        if ($unavailable = $this->capacityUnavailable($router, $package, $customer->id)) {
+            return $unavailable;
+        }
         $fulfillmentType = $router->isManual() ? 'voucher' : 'live';
 
         $expiryMinutes = (int) (SystemSetting::get('order_expiry_minutes') ?? 60);
@@ -189,6 +198,21 @@ class PurchaseController extends Controller
         ]);
 
         return response()->json($this->paymentPagePayload($purchase), 201);
+    }
+
+    private function capacityUnavailable(Router $router, InternetPackage $package, int $customerId)
+    {
+        $capacity = app(CapacityService::class);
+        $availability = $capacity->availability($router, $package, $customerId);
+        if ($availability['available']) {
+            return null;
+        }
+
+        return response()->json([
+            'message' => $capacity->unavailableMessage($availability['reason']),
+            'capacity_available' => false,
+            'reason' => $availability['reason'],
+        ], 422);
     }
 
     public function show(Request $request, string $reference)
@@ -215,6 +239,7 @@ class PurchaseController extends Controller
             'has_voucher' => $purchase->voucher_id !== null,
             'fulfillment_type' => $purchase->fulfillment_type,
             'connection_ready' => $this->connectionReady($purchase),
+            'queue_reason' => $purchase->queue_reason,
         ]);
     }
 
@@ -292,7 +317,7 @@ class PurchaseController extends Controller
             return response()->json([
                 'success' => $purchase->isActive(),
                 'status' => $purchase->status,
-                'message' => 'This purchase is already ' . $purchase->status . '.',
+                'message' => 'This purchase is already '.$purchase->status.'.',
             ]);
         }
 

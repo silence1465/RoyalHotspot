@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use App\Models\InternetPackage;
 use App\Models\SystemSetting;
+use App\Services\CapacityService;
+use Illuminate\Http\Request;
 
 class PackageController extends Controller
 {
@@ -27,27 +29,32 @@ class PackageController extends Controller
      * Paystack was assumed to require live provisioning — that
      * assumption no longer holds.
      */
-    public function index()
+    public function index(?Request $request = null, ?CapacityService $capacity = null)
     {
+        $request ??= request();
+        $capacity ??= app(CapacityService::class);
         $packages = InternetPackage::active()
-                ->with(['routerProfiles.router' => function ($query) {
-                    $query->select('id', 'name', 'location', 'status', 'connection_mode', 'momo_enabled', 'paystack_enabled');
-                }])
-                ->orderBy('price')
-                ->get(['id', 'name', 'description', 'price', 'duration_value', 'duration_unit', 'momo_bonus_value', 'momo_bonus_unit', 'speed_limit', 'data_limit', 'sales_channel'])
-                ->map(function ($package) {
-                    return [
-                        'id' => $package->id,
-                        'name' => $package->name,
-                        'description' => $package->description,
-                        'price' => $package->price,
-                        'duration_value' => $package->duration_value,
-                        'duration_unit' => $package->duration_unit,
-                        'momo_bonus_value' => $package->momo_bonus_value,
-                        'momo_bonus_unit' => $package->momo_bonus_unit,
-                        'speed_limit' => $package->speed_limit,
-                        'data_limit' => $package->data_limit,
-                        'available_routers' => $package->routerProfiles->pluck('router')->filter()->map(fn ($router) => [
+            ->with(['routerProfiles.router' => function ($query) {
+                $query->select('id', 'name', 'location', 'status', 'connection_mode', 'momo_enabled', 'paystack_enabled');
+            }])
+            ->orderBy('price')
+            ->get(['id', 'name', 'description', 'price', 'duration_value', 'duration_unit', 'momo_bonus_value', 'momo_bonus_unit', 'speed_limit', 'data_limit', 'sales_channel', 'usage_policy', 'data_allowance_bytes'])
+            ->map(function ($package) use ($capacity, $request) {
+                return [
+                    'id' => $package->id,
+                    'name' => $package->name,
+                    'description' => $package->description,
+                    'price' => $package->price,
+                    'duration_value' => $package->duration_value,
+                    'duration_unit' => $package->duration_unit,
+                    'momo_bonus_value' => $package->momo_bonus_value,
+                    'momo_bonus_unit' => $package->momo_bonus_unit,
+                    'speed_limit' => $package->speed_limit,
+                    'data_limit' => $package->data_limit,
+                    'available_routers' => $package->routerProfiles->pluck('router')->filter()->map(function ($router) use ($capacity, $package, $request) {
+                        $availability = $capacity->availability($router, $package, $request->user()?->id);
+
+                        return [
                             'id' => $router->id,
                             'name' => $router->name,
                             'location' => $router->location,
@@ -57,9 +64,14 @@ class PackageController extends Controller
                                 'momo' => $this->gatewayEnabled('momo') && $router->momo_enabled,
                                 'paystack' => $this->gatewayEnabled('paystack') && $router->paystack_enabled,
                             ],
-                        ])->values(),
-                    ];
-                });
+                            'capacity_available' => $availability['available'],
+                            'capacity_message' => $availability['available']
+                                ? 'Capacity available'
+                                : $capacity->unavailableMessage($availability['reason']),
+                        ];
+                    })->values(),
+                ];
+            });
 
         return response()->json([
             'packages' => $packages,

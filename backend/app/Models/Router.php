@@ -12,7 +12,8 @@ class Router extends Model
 
     protected $fillable = [
         'name', 'location', 'router_ip', 'wireguard_ip',
-        'api_username', 'api_password', 'api_port', 'api_ssl', 'status', 'connection_mode',
+        'api_username', 'api_password', 'api_port', 'api_ssl', 'status', 'connection_mode', 'routeros_version',
+        'isp_failover_enabled', 'isp_failback_enabled',
         'momo_enabled', 'paystack_enabled',
         'provisioning_api_username', 'provisioning_api_password', 'address_pool',
         'hotspot_login_host',
@@ -32,6 +33,8 @@ class Router extends Model
         'api_ssl' => 'boolean',
         'momo_enabled' => 'boolean',
         'paystack_enabled' => 'boolean',
+        'isp_failover_enabled' => 'boolean',
+        'isp_failback_enabled' => 'boolean',
     ];
 
     public function purchases()
@@ -47,6 +50,11 @@ class Router extends Model
     public function packageProfiles()
     {
         return $this->hasMany(RouterPackageProfile::class);
+    }
+
+    public function isps()
+    {
+        return $this->hasMany(RouterIsp::class)->orderBy('priority')->orderBy('id');
     }
 
     public function mikrotikLogs()

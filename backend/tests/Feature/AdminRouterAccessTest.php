@@ -3,13 +3,18 @@
 namespace Tests\Feature;
 
 use App\Models\Customer;
+use App\Models\HotspotUser;
 use App\Models\InternetPackage;
 use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\RouterPackageProfile;
+use App\Models\SystemSetting;
 use App\Models\User;
+use App\Services\MikrotikService;
+use App\Services\MikrotikServiceFactory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Mockery;
 use Tests\TestCase;
 
 class AdminRouterAccessTest extends TestCase
@@ -155,5 +160,224 @@ class AdminRouterAccessTest extends TestCase
         $this->assertCount(2, $response->json('routers'));
         $this->assertDatabaseHas('users', ['email' => 'two-router@example.test']);
         $this->assertDatabaseCount('admin_router', 2);
+    }
+
+    public function test_admin_can_quickly_change_the_operating_mode(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $token = $admin->createToken('mode-admin', ['admin'])->plainTextToken;
+
+        $this->withToken($token)->getJson('/api/v1/admin/operating-mode')
+            ->assertOk()
+            ->assertJsonPath('mode', 'normal');
+
+        $this->withToken($token)->putJson('/api/v1/admin/operating-mode', ['mode' => 'data_cap'])
+            ->assertUnprocessable();
+
+        $this->withToken($token)->putJson('/api/v1/admin/operating-mode', ['mode' => 'normal'])
+            ->assertOk()
+            ->assertJsonPath('mode', 'normal');
+
+        $this->assertSame('normal', SystemSetting::get('operating_mode'));
+        $this->assertDatabaseHas('activity_logs', [
+            'user_id' => $admin->id,
+            'action' => 'settings.operating_mode_updated',
+        ]);
+
+        $this->withToken($token)->putJson('/api/v1/admin/operating-mode', ['mode' => 'unsupported'])
+            ->assertUnprocessable();
+    }
+
+    public function test_restricted_admin_cannot_change_global_mode_or_read_global_settings(): void
+    {
+        $admin = User::factory()->admin()->create(['permissions' => ['customers.view']]);
+        $token = $admin->createToken('restricted-mode', ['admin'])->plainTextToken;
+        $this->withToken($token)->putJson('/api/v1/admin/operating-mode', ['mode' => 'normal'])->assertForbidden();
+        $this->withToken($token)->getJson('/api/v1/admin/settings')->assertForbidden();
+        $this->withToken($token)->getJson('/api/v1/admin/notifications/summary')
+            ->assertOk()->assertJsonCount(0, 'recent')->assertJsonCount(0, 'navigation_counts');
+    }
+
+    public function test_deactivated_admin_cannot_reuse_a_token(): void
+    {
+        $admin = User::factory()->admin()->create(['status' => 'inactive']);
+        $token = $admin->createToken('inactive-admin', ['admin'])->plainTextToken;
+        $this->withToken($token)->getJson('/api/v1/admin/me')->assertForbidden();
+    }
+
+    public function test_global_search_does_not_reveal_unassigned_customers(): void
+    {
+        [$allowed, $other] = Router::factory()->count(2)->create();
+        $package = InternetPackage::factory()->create();
+        foreach ([$allowed, $other] as $router) {
+            $customer = Customer::factory()->active()->create(['full_name' => 'Search Dummy '.$router->id]);
+            Purchase::create([
+                'customer_id' => $customer->id, 'router_id' => $router->id, 'package_id' => $package->id,
+                'amount' => 10, 'reference' => 'RW-SEARCH-'.$router->id,
+                'status' => 'active', 'payment_method' => 'momo', 'fulfillment_type' => 'live',
+            ]);
+        }
+        $admin = User::factory()->admin()->create(['permissions' => ['customers.view']]);
+        $admin->routers()->attach($allowed);
+        $token = $admin->createToken('search-test', ['admin'])->plainTextToken;
+        $this->withToken($token)->getJson('/api/v1/admin/search?q=Search')
+            ->assertOk()->assertJsonCount(1, 'customers')
+            ->assertJsonPath('customers.0.full_name', 'Search Dummy '.$allowed->id)
+            ->assertJsonCount(0, 'purchases')->assertJsonCount(0, 'vouchers');
+    }
+
+    public function test_router_isp_topology_can_be_managed_from_router_form(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $token = $admin->createToken('topology-admin', ['admin'])->plainTextToken;
+        config(['mikrotik_security.key_hash' => Hash::make('dummy-secure-key')]);
+
+        $this->withToken($token)->postJson('/api/v1/admin/mikrotik-security/unlock', [
+            'security_key' => 'dummy-secure-key',
+        ])->assertOk();
+
+        $response = $this->withToken($token)->postJson('/api/v1/admin/routers', [
+            'name' => 'Production CCR',
+            'location' => 'Tarkwa',
+            'connection_mode' => 'live',
+            'wireguard_ip' => '10.30.0.2',
+            'api_username' => 'api-admin',
+            'api_password' => 'safe-router-password',
+            'api_port' => 8729,
+            'api_ssl' => true,
+            'routeros_version' => '7.18.2',
+            'isp_failover_enabled' => true,
+            'isp_failback_enabled' => true,
+            'isps' => [[
+                'name' => 'Primary Fiber',
+                'wan_interface' => 'ether1',
+                'gateway' => '192.168.10.1',
+                'routing_table' => 'to-primary',
+                'monthly_capacity_gb' => 3000,
+                'subscriber_limit' => 200,
+                'priority' => 10,
+                'enabled' => true,
+            ]],
+        ])->assertCreated()
+            ->assertJsonPath('routeros_version', '7.18.2')
+            ->assertJsonPath('isp_failover_enabled', true)
+            ->assertJsonPath('isp_failback_enabled', true)
+            ->assertJsonPath('isps.0.name', 'Primary Fiber')
+            ->assertJsonPath('isps.0.monthly_capacity_bytes', 3221225472000);
+
+        $routerId = $response->json('id');
+        $ispId = $response->json('isps.0.id');
+
+        $this->withToken($token)->putJson("/api/v1/admin/routers/{$routerId}", [
+            'name' => 'Production CCR',
+            'location' => 'Tarkwa',
+            'connection_mode' => 'live',
+            'wireguard_ip' => '10.30.0.2',
+            'api_username' => 'api-admin',
+            'api_port' => 8729,
+            'api_ssl' => true,
+            'routeros_version' => '7.18.2',
+            'isp_failover_enabled' => false,
+            'isp_failback_enabled' => true,
+            'isps' => [[
+                'id' => $ispId,
+                'name' => 'Primary Fiber',
+                'wan_interface' => 'ether1',
+                'gateway' => '192.168.10.1',
+                'routing_table' => 'to-primary',
+                'monthly_capacity_gb' => 3500,
+                'subscriber_limit' => 250,
+                'priority' => 10,
+                'enabled' => true,
+            ], [
+                'name' => 'Backup LTE',
+                'wan_interface' => 'ether2',
+                'gateway' => '192.168.20.1',
+                'routing_table' => 'to-backup',
+                'monthly_capacity_gb' => 500,
+                'subscriber_limit' => 50,
+                'priority' => 20,
+                'enabled' => false,
+            ]],
+        ])->assertOk()
+            ->assertJsonCount(2, 'isps')
+            ->assertJsonPath('isp_failover_enabled', false)
+            ->assertJsonPath('isps.0.subscriber_limit', 250)
+            ->assertJsonPath('isps.1.enabled', false);
+
+        $this->assertDatabaseHas('router_isps', [
+            'router_id' => $routerId,
+            'name' => 'Primary Fiber',
+            'monthly_capacity_bytes' => 3758096384000,
+        ]);
+    }
+
+    public function test_authorized_admin_can_reset_router_wifi_password_and_receives_it_once(): void
+    {
+        $router = Router::factory()->create();
+        $customer = Customer::factory()->active()->create();
+        $hotspotUser = HotspotUser::create([
+            'customer_id' => $customer->id,
+            'router_id' => $router->id,
+            'mikrotik_user_id' => '*OLD',
+            'username' => $customer->username,
+            'password' => 'old-password',
+            'profile' => '1-week',
+            'disabled' => false,
+        ]);
+        $admin = User::factory()->admin()->create(['permissions' => ['customers.view', 'customers.manage']]);
+        $admin->routers()->attach($router);
+        $token = $admin->createToken('password-reset-admin', ['admin'])->plainTextToken;
+        config(['mikrotik_security.key_hash' => Hash::make('dummy-secure-key')]);
+        $this->withToken($token)->postJson('/api/v1/admin/mikrotik-security/unlock', [
+            'security_key' => 'dummy-secure-key',
+        ])->assertOk();
+
+        $generatedPassword = null;
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('resetHotspotUserPassword')->once()
+            ->with($customer->username, Mockery::on(function ($value) use (&$generatedPassword) {
+                $generatedPassword = $value;
+
+                return is_string($value) && strlen($value) >= 8;
+            }))
+            ->andReturn(['success' => true, 'data' => [
+                'mikrotik_user_id' => '*CURRENT', 'disconnected_sessions' => 1, 'removed_cookies' => 1,
+            ]]);
+        $factory = Mockery::mock(MikrotikServiceFactory::class);
+        $factory->shouldReceive('make')->once()->withArgs(fn ($value) => $value->is($router))->andReturn($mikrotik);
+        $this->app->instance(MikrotikServiceFactory::class, $factory);
+
+        $response = $this->withToken($token)
+            ->postJson("/api/v1/admin/customers/{$customer->id}/hotspot-users/{$hotspotUser->id}/reset-password")
+            ->assertOk()
+            ->assertJsonPath('username', $customer->username)
+            ->assertJsonPath('temporary_password', fn ($value) => $value === $generatedPassword);
+
+        $this->assertSame($response->json('temporary_password'), $hotspotUser->fresh()->makeVisible('password')->password);
+        $this->assertSame('*CURRENT', $hotspotUser->fresh()->mikrotik_user_id);
+        $this->assertDatabaseHas('activity_logs', [
+            'user_id' => $admin->id,
+            'action' => 'customer.hotspot_password_reset',
+        ]);
+    }
+
+    public function test_wifi_password_reset_requires_manage_permission(): void
+    {
+        $router = Router::factory()->create();
+        $customer = Customer::factory()->active()->create();
+        $hotspotUser = HotspotUser::create([
+            'customer_id' => $customer->id, 'router_id' => $router->id,
+            'username' => $customer->username, 'password' => 'unchanged-password',
+            'profile' => '1-week', 'disabled' => false,
+        ]);
+        $admin = User::factory()->admin()->create(['permissions' => ['customers.view']]);
+        $admin->routers()->attach($router);
+        $token = $admin->createToken('customer-viewer', ['admin'])->plainTextToken;
+
+        $this->withToken($token)
+            ->postJson("/api/v1/admin/customers/{$customer->id}/hotspot-users/{$hotspotUser->id}/reset-password")
+            ->assertForbidden();
+        $this->assertSame('unchanged-password', $hotspotUser->fresh()->makeVisible('password')->password);
     }
 }

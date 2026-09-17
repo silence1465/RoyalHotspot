@@ -18,6 +18,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Mockery;
+use RouterOS\Client;
 use Tests\TestCase;
 
 class HotspotConnectionFlowTest extends TestCase
@@ -182,13 +183,16 @@ class HotspotConnectionFlowTest extends TestCase
         $service = new HotspotSessionService($factory);
 
         $prepared = $service->prepare($customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8');
+        $this->assertNull($purchase->fresh()->starts_at);
+        $again = $service->prepare($customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8');
+        $this->assertSame($prepared['session_id'], $again['session_id']);
+
+        $session = HotspotSession::where('public_id', $prepared['session_id'])->with('router')->firstOrFail();
+        $service->confirm($customer, $session);
         $startedAt = $purchase->fresh()->starts_at;
         $expiresAt = $purchase->fresh()->expires_at;
         $this->assertNotNull($startedAt);
         $this->assertEquals(60, $startedAt->diffInMinutes($expiresAt));
-
-        $session = HotspotSession::where('public_id', $prepared['session_id'])->with('router')->firstOrFail();
-        $service->confirm($customer, $session);
         $reconnect = $service->prepare($customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8');
 
         $this->assertTrue($reconnect['connected']);
@@ -233,7 +237,7 @@ class HotspotConnectionFlowTest extends TestCase
 
         $this->assertFalse($prepared['connected']);
         $this->assertSame('expired', $oldSession->fresh()->status);
-        $this->assertNotNull($newPurchase->fresh()->starts_at);
+        $this->assertNull($newPurchase->fresh()->starts_at);
         $this->assertDatabaseHas('hotspot_sessions', ['public_id' => $prepared['session_id'], 'purchase_id' => $newPurchase->id, 'status' => 'connecting']);
     }
 
@@ -268,14 +272,198 @@ class HotspotConnectionFlowTest extends TestCase
         $this->assertNull($purchase->fresh()->expires_at);
 
         $this->hotspotUser($customer, $router, 'grant-user');
-        $mikrotik->shouldReceive('getActiveUsers')->once()->andReturn(['success' => true, 'data' => []]);
+        $mikrotik->shouldReceive('getActiveUsers')->twice()->andReturn(
+            ['success' => true, 'data' => []],
+            ['success' => true, 'data' => [['.id' => '*GRANT', 'user' => 'grant-user', 'mac-address' => 'AA:BB:CC:DD:EE:FF', 'address' => '10.0.0.8']]]
+        );
         $this->app->instance(MikrotikServiceFactory::class, $factory);
-        (new HotspotSessionService($factory))->prepare(
+        $sessionService = new HotspotSessionService($factory);
+        $prepared = $sessionService->prepare(
             $customer, $router->id, 'http://login.hotspot.local/login', 'AA:BB:CC:DD:EE:FF', '10.0.0.8'
         );
+        $this->assertNull($purchase->fresh()->starts_at);
+        $sessionService->confirm($customer, HotspotSession::where('public_id', $prepared['session_id'])->firstOrFail());
 
         $this->assertNotNull($purchase->fresh()->starts_at);
         $this->assertNotNull($purchase->fresh()->expires_at);
+    }
+
+    public function test_failed_expiry_can_retry_without_losing_the_purchase(): void
+    {
+        [$customer, $router, $purchase] = $this->records('retry-expiry');
+        $purchase->update(['expires_at' => now()->subMinute()]);
+        $session = $this->activeSession($customer, $router, $purchase);
+        $this->hotspotUser($customer, $router, $customer->username);
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('disableAndDisconnectHotspotUser')->twice()->andReturn(
+            ['success' => false, 'error' => 'router timeout'],
+            ['success' => true]
+        );
+        $service = new PurchaseService($this->factory($mikrotik));
+        try {
+            $service->expirePurchase($purchase);
+            $this->fail('Router failure must not report successful expiry.');
+        } catch (\RuntimeException $exception) {
+            $this->assertStringContainsString('router timeout', $exception->getMessage());
+        }
+        $this->assertSame('active', $purchase->fresh()->status);
+        $this->assertSame('active', $session->fresh()->status);
+        $service->expirePurchase($purchase->fresh());
+        $this->assertSame('expired', $purchase->fresh()->status);
+        $this->assertSame('expired', $session->fresh()->status);
+    }
+
+    public function test_confirmation_cannot_revive_an_expired_purchase(): void
+    {
+        [$customer, $router, $purchase] = $this->records('expired-confirm');
+        $session = $this->activeSession($customer, $router, $purchase);
+        $session->update(['status' => 'connecting']);
+        $purchase->update(['status' => 'expired', 'expires_at' => now()->subMinute()]);
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('disconnectAndClearHotspotCookies')->once()->andReturn(['success' => true]);
+        $result = (new HotspotSessionService($this->factory($mikrotik)))->confirm($customer, $session);
+        $this->assertSame('expired', $result->status);
+        $this->assertSame('expired', $purchase->fresh()->status);
+    }
+
+    public function test_old_expiry_does_not_disconnect_a_new_started_purchase(): void
+    {
+        [$customer, $router, $old] = $this->records('replacement-protected');
+        $old->update(['expires_at' => now()->subMinute()]);
+        $new = $old->replicate();
+        $new->fill(['reference' => 'RW-NEW-VALID', 'starts_at' => now(), 'expires_at' => now()->addHour()])->save();
+        $session = $this->activeSession($customer, $router, $new);
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldNotReceive('disableAndDisconnectHotspotUser');
+        (new PurchaseService($this->factory($mikrotik)))->expirePurchase($old);
+        $this->assertSame('expired', $old->fresh()->status);
+        $this->assertSame('active', $new->fresh()->status);
+        $this->assertSame('active', $session->fresh()->status);
+    }
+
+    public function test_router_command_failure_is_not_hidden_by_revocation_summary(): void
+    {
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $client = Mockery::mock(Client::class);
+        $client->shouldReceive('query')->twice()->andReturnSelf();
+        $client->shouldReceive('read')->twice()->andReturn(
+            [['.id' => '*REAL', 'name' => 'target-user']],
+            ['after' => ['message' => 'not enough permissions']]
+        );
+        $service = Mockery::mock(MikrotikService::class, [$router])->makePartial()->shouldAllowMockingProtectedMethods();
+        $service->shouldReceive('connect')->once()->andReturn($client);
+        $result = $service->disableAndDisconnectHotspotUser('target-user', '*STALE');
+        $this->assertFalse($result['success']);
+        $this->assertStringContainsString('not enough permissions', $result['error']);
+    }
+
+    public function test_revocation_only_removes_target_users_sessions_and_cookies(): void
+    {
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $queries = [];
+        $client = Mockery::mock(Client::class);
+        $client->shouldReceive('query')->times(6)->andReturnUsing(function ($query) use ($client, &$queries) {
+            $queries[] = $query->getQuery();
+
+            return $client;
+        });
+        $client->shouldReceive('read')->times(6)->andReturn(
+            [['.id' => '*REAL', 'name' => 'target-user']], [],
+            [['.id' => '*ACTIVE', 'user' => 'target-user'], ['.id' => '*OTHER', 'user' => 'another-user']], [],
+            [['.id' => '*COOKIE', 'user' => 'target-user'], ['.id' => '*OTHERCOOKIE', 'user' => 'another-user']], []
+        );
+        $service = Mockery::mock(MikrotikService::class, [$router])->makePartial()->shouldAllowMockingProtectedMethods();
+        $service->shouldReceive('connect')->once()->andReturn($client);
+        $result = $service->disableAndDisconnectHotspotUser('target-user', '*STALE');
+        $this->assertTrue($result['success']);
+        $this->assertSame(1, $result['data']['disconnected_sessions']);
+        $this->assertSame(1, $result['data']['removed_cookies']);
+        $serialized = json_encode($queries);
+        $this->assertStringNotContainsString('*OTHER', $serialized);
+        $this->assertStringNotContainsString('*STALE', $serialized);
+    }
+
+    public function test_password_reset_disconnects_only_target_and_updates_exact_routeros_user(): void
+    {
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $queries = [];
+        $client = Mockery::mock(Client::class);
+        $client->shouldReceive('query')->times(6)->andReturnUsing(function ($query) use ($client, &$queries) {
+            $queries[] = $query->getQuery();
+
+            return $client;
+        });
+        $client->shouldReceive('read')->times(6)->andReturn(
+            [['.id' => '*TARGET', 'name' => 'reset-user'], ['.id' => '*OTHERUSER', 'name' => 'other-user']],
+            [['.id' => '*ACTIVE', 'user' => 'reset-user'], ['.id' => '*OTHERACTIVE', 'user' => 'other-user']],
+            [],
+            [['.id' => '*COOKIE', 'user' => 'reset-user'], ['.id' => '*OTHERCOOKIE', 'user' => 'other-user']],
+            [],
+            []
+        );
+        $service = Mockery::mock(MikrotikService::class, [$router])->makePartial()->shouldAllowMockingProtectedMethods();
+        $service->shouldReceive('connect')->once()->andReturn($client);
+
+        $result = $service->resetHotspotUserPassword('reset-user', 'NewPassword123');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('*TARGET', $result['data']['mikrotik_user_id']);
+        $this->assertSame(1, $result['data']['disconnected_sessions']);
+        $this->assertSame(1, $result['data']['removed_cookies']);
+        $serialized = json_encode($queries);
+        $this->assertStringContainsString('*TARGET', $serialized);
+        $this->assertStringContainsString('NewPassword123', $serialized);
+        $this->assertStringNotContainsString('*OTHERACTIVE', $serialized);
+        $this->assertStringNotContainsString('*OTHERCOOKIE', $serialized);
+        $this->assertStringNotContainsString('*OTHERUSER', $serialized);
+    }
+
+    public function test_customer_can_self_reset_owned_wifi_password_with_dashboard_confirmation(): void
+    {
+        [$customer, $router, $purchase] = $this->records('self-reset-user');
+        $customer->update(['password' => 'DashboardPass123']);
+        $hotspotUser = $this->hotspotUser($customer, $router, 'self-reset-user');
+        $hotspotUser->update(['last_bytes_in' => 1234, 'last_bytes_out' => 5678]);
+        $session = $this->activeSession($customer, $router, $purchase, 'self-reset-user');
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('resetHotspotUserPassword')->once()
+            ->with('self-reset-user', 'FreshWifi123')
+            ->andReturn(['success' => true, 'data' => [
+                'mikrotik_user_id' => '*RESET', 'disconnected_sessions' => 1, 'removed_cookies' => 1,
+            ]]);
+        $this->bindFactory($mikrotik);
+        $token = $customer->createToken('self-reset', ['customer'])->plainTextToken;
+
+        $this->withToken($token)->postJson('/api/v1/customer/profile/wifi-password', [
+            'router_id' => $router->id,
+            'current_password' => 'wrong-password',
+            'password' => 'FreshWifi123',
+            'password_confirmation' => 'FreshWifi123',
+        ])->assertUnprocessable()
+            ->assertJsonPath('errors.current_password.0', 'The current dashboard password is incorrect.');
+        $this->assertSame('hotspot-password', $hotspotUser->fresh()->makeVisible('password')->password);
+
+        $this->withToken($token)->postJson('/api/v1/customer/profile/wifi-password', [
+            'router_id' => $router->id,
+            'current_password' => 'DashboardPass123',
+            'password' => 'FreshWifi123',
+            'password_confirmation' => 'FreshWifi123',
+        ])->assertOk()
+            ->assertJsonPath('username', 'self-reset-user')
+            ->assertJsonPath('password', 'FreshWifi123');
+
+        $hotspotUser->refresh()->makeVisible('password');
+        $this->assertSame('FreshWifi123', $hotspotUser->password);
+        $this->assertSame('*RESET', $hotspotUser->mikrotik_user_id);
+        $this->assertSame(1234, $hotspotUser->last_bytes_in);
+        $this->assertSame(5678, $hotspotUser->last_bytes_out);
+        $this->assertSame('disconnected', $session->fresh()->status);
+        $this->assertSame('wifi_password_reset', $session->fresh()->disconnect_reason);
+        $this->assertNotNull($session->fresh()->ended_at);
+        $this->assertDatabaseHas('activity_logs', [
+            'customer_id' => $customer->id,
+            'action' => 'customer.hotspot_password_self_reset',
+        ]);
     }
 
     private function records(string $username): array

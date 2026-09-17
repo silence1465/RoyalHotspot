@@ -11,7 +11,7 @@ class Purchase extends Model
     use HasFactory;
 
     protected $fillable = [
-        'customer_id', 'free_trial_campaign_id', 'package_id', 'router_id', 'subtotal', 'payment_fee', 'amount', 'reference',
+        'customer_id', 'free_trial_campaign_id', 'package_id', 'router_id', 'router_isp_id', 'subtotal', 'payment_fee', 'amount', 'reference',
         'payment_method', 'bonus_duration_minutes', 'fulfillment_type', 'status',
         'starts_at', 'voucher_id', 'verified_at', 'verification_method',
         'verified_by', 'momo_transaction_id', 'expires_at', 'admin_notes',
@@ -21,7 +21,8 @@ class Purchase extends Model
         'tier1_speed_percent', 'tier2_speed_percent', 'tier3_speed_percent',
         'cycle_bytes_used', 'current_fup_tier', 'applied_speed_limit',
         'usage_policy_applied_at',
-        'policy_access_status',
+        'policy_access_status', 'capacity_month', 'capacity_reserved_bytes', 'rollover_bytes',
+        'rollover_expires_on', 'queue_reason',
     ];
 
     protected $casts = [
@@ -41,6 +42,10 @@ class Purchase extends Model
         'tier2_speed_percent' => 'integer',
         'tier3_speed_percent' => 'integer',
         'usage_policy_applied_at' => 'datetime',
+        'capacity_month' => 'date',
+        'capacity_reserved_bytes' => 'integer',
+        'rollover_bytes' => 'integer',
+        'rollover_expires_on' => 'date',
     ];
 
     // ── Relationships ───────────────────────────────────────────────
@@ -63,6 +68,11 @@ class Purchase extends Model
     public function router()
     {
         return $this->belongsTo(Router::class);
+    }
+
+    public function routerIsp()
+    {
+        return $this->belongsTo(RouterIsp::class);
     }
 
     public function voucher()
@@ -101,7 +111,7 @@ class Purchase extends Model
     public static function generateReference(): string
     {
         do {
-            $reference = 'RW-' . strtoupper(Str::random(6));
+            $reference = 'RW-'.strtoupper(Str::random(6));
         } while (static::where('reference', $reference)->exists());
 
         return $reference;

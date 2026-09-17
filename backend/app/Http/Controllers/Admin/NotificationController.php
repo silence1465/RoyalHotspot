@@ -14,6 +14,7 @@ use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\SystemSetting;
 use App\Models\Voucher;
+use Illuminate\Http\Request;
 
 /**
  * Backs the admin notification bell — badge counts are live-computed
@@ -24,8 +25,13 @@ use App\Models\Voucher;
  */
 class NotificationController extends Controller
 {
-    public function summary()
+    public function summary(Request $request)
     {
+        // Global activity messages may contain another router's customer data.
+        if (! $request->user()->isSuperAdmin() || $request->attributes->get('admin_router_ids') !== null) {
+            return response()->json(['badges' => [], 'navigation_counts' => [], 'recent' => []]);
+        }
+
         return response()->json([
             'badges' => [
                 // 'Needs Attention' on the Purchases page — manual_review

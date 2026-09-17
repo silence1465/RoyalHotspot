@@ -25,7 +25,7 @@ export function AuthProvider({ children }) {
     const mePath = storedRole === 'admin' ? '/admin/me' : '/customer/me';
 
     api
-      .get(mePath)
+      .get(mePath, storedRole === 'admin' ? { headers: { 'X-Router-Id': 'all' } } : {})
       .then(({ data }) => setUser(data))
       .catch(() => {
         localStorage.removeItem('auth_token');
@@ -41,6 +41,7 @@ export function AuthProvider({ children }) {
     setLoading(true);
     try {
       const { data } = await api.post(path, credentials);
+      if (loginAs === 'admin') localStorage.removeItem('admin_router_scope');
       const storage = loginAs === 'admin' ? sessionStorage : localStorage;
       storage.setItem('auth_token', data.token);
       storage.setItem('auth_role', loginAs);

@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Menu, LogOut } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import api from '../services/api';
 import NotificationBell from './NotificationBell';
 import GlobalSearch from './GlobalSearch';
 import SmsForwarderIcon from './SmsForwarderIcon';
@@ -14,6 +16,27 @@ import SmsForwarderIcon from './SmsForwarderIcon';
 export default function Topbar({ onMenuClick, logoutRedirect = '/admin/login', fallbackLabel = 'Admin', showAdminExtras = true }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [operatingMode, setOperatingMode] = useState('');
+  const [modeLoading, setModeLoading] = useState(true);
+  const [modeError, setModeError] = useState('');
+  const canChangeMode = showAdminExtras && user?.role === 'super_admin';
+
+  useEffect(() => {
+    if (!canChangeMode) return;
+
+    let active = true;
+    setModeLoading(true);
+    api.get('/admin/operating-mode')
+      .then(({ data }) => {
+        if (active) setOperatingMode(data.mode || 'normal');
+      })
+      .catch(() => {
+        if (active) setModeError('Could not load operating mode. Refresh to retry.');
+      })
+      .finally(() => { if (active) setModeLoading(false); });
+
+    return () => { active = false; };
+  }, [canChangeMode]);
 
   const handleLogout = async () => {
     await logout();
@@ -26,8 +49,23 @@ export default function Topbar({ onMenuClick, logoutRedirect = '/admin/login', f
     window.location.reload();
   };
 
+  const changeOperatingMode = async (value) => {
+    const previous = operatingMode;
+    setModeError('');
+    setModeLoading(true);
+    try {
+      const { data } = await api.put('/admin/operating-mode', { mode: value });
+      setOperatingMode(data.mode);
+    } catch (error) {
+      setOperatingMode(previous);
+      setModeError(error.response?.data?.message || 'Could not save operating mode. Please retry.');
+    } finally {
+      setModeLoading(false);
+    }
+  };
+
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between bg-white border-b border-slate-200 px-4 sm:px-6 py-3">
+    <header className="sticky top-0 z-30 flex flex-wrap gap-2 items-center justify-between bg-white border-b border-slate-200 px-3 sm:px-6 py-3">
       <button
         onClick={onMenuClick}
         className="lg:hidden text-slate-600 hover:text-slate-900"
@@ -38,11 +76,30 @@ export default function Topbar({ onMenuClick, logoutRedirect = '/admin/login', f
 
       {showAdminExtras ? <GlobalSearch /> : <div className="hidden lg:block" />}
 
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3 min-w-0">
+        {canChangeMode && (
+          <div className="relative">
+          <select
+            aria-label="Operating mode"
+            title="System operating mode"
+            className="input w-28 sm:w-36 text-sm"
+            value={operatingMode}
+            disabled={modeLoading || !operatingMode}
+            onChange={(event) => changeOperatingMode(event.target.value)}
+          >
+            <option value="" disabled>{modeLoading ? 'Loading…' : 'Unavailable'}</option>
+            <option value="normal">Normal</option>
+            <option value="data_cap">Data Cap</option>
+            <option value="user_cap">User + Data Cap</option>
+          </select>
+          {modeError && <p role="alert" className="absolute right-0 top-full mt-1 w-60 rounded border border-red-200 bg-white p-2 text-xs text-red-700 shadow z-50">{modeError}</p>}
+          </div>
+        )}
         {showAdminExtras && user?.routers && (
           <select
             aria-label="Selected router"
-            className="input max-w-56 text-sm"
+            title="Selected router"
+            className="input w-32 sm:w-40 text-sm"
             value={selectedRouter}
             onChange={(event) => changeRouter(event.target.value)}
           >

@@ -2,6 +2,17 @@ import { useState } from 'react';
 import Modal from '../../components/Modal';
 import api from '../../services/api';
 
+const emptyIsp = () => ({
+  name: '',
+  wan_interface: '',
+  gateway: '',
+  routing_table: 'main',
+  monthly_capacity_gb: '',
+  subscriber_limit: '',
+  priority: 100,
+  enabled: true,
+});
+
 const emptyForm = {
   name: '',
   location: '',
@@ -18,6 +29,10 @@ const emptyForm = {
   hotspot_login_host: '',
   momo_enabled: true,
   paystack_enabled: true,
+  routeros_version: '',
+  isp_failover_enabled: false,
+  isp_failback_enabled: true,
+  isps: [],
 };
 
 export default function RouterFormModal({ router, onClose, onSaved }) {
@@ -40,6 +55,16 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
           hotspot_login_host: router.hotspot_login_host || '',
           momo_enabled: router.momo_enabled ?? true,
           paystack_enabled: router.paystack_enabled ?? true,
+          routeros_version: router.routeros_version || '',
+          isp_failover_enabled: router.isp_failover_enabled ?? false,
+          isp_failback_enabled: router.isp_failback_enabled ?? true,
+          isps: (router.isps || []).map((isp) => ({
+            ...isp,
+            monthly_capacity_gb: isp.monthly_capacity_bytes
+              ? Number(isp.monthly_capacity_bytes) / 1073741824
+              : '',
+            subscriber_limit: isp.subscriber_limit || '',
+          })),
         }
       : emptyForm
   );
@@ -50,6 +75,16 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
   const isManual = form.connection_mode === 'manual';
 
   const handleChange = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const handleIspChange = (index, key, value) => {
+    setForm((current) => ({
+      ...current,
+      isps: current.isps.map((isp, ispIndex) => (ispIndex === index ? { ...isp, [key]: value } : isp)),
+    }));
+  };
+  const addIsp = () => setForm((current) => ({ ...current, isps: [...current.isps, emptyIsp()] }));
+  const removeIsp = (index) => {
+    setForm((current) => ({ ...current, isps: current.isps.filter((_, ispIndex) => ispIndex !== index) }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -63,7 +98,17 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
     // empty string would get written (and, for api_password, actually
     // encrypted) as a real "blank" value instead of being cleanly absent.
     const payload = isManual
-      ? { name: form.name, location: form.location, connection_mode: form.connection_mode, momo_enabled: form.momo_enabled, paystack_enabled: form.paystack_enabled }
+      ? {
+          name: form.name,
+          location: form.location,
+          connection_mode: form.connection_mode,
+          routeros_version: form.routeros_version,
+          isp_failover_enabled: form.isp_failover_enabled,
+          isp_failback_enabled: form.isp_failback_enabled,
+          isps: form.isps,
+          momo_enabled: form.momo_enabled,
+          paystack_enabled: form.paystack_enabled,
+        }
       : form;
 
     try {
@@ -164,6 +209,121 @@ export default function RouterFormModal({ router, onClose, onSaved }) {
               onChange={(e) => handleChange('location', e.target.value)}
             />
           </Field>
+
+          <Field label="RouterOS Version" error={fieldError('routeros_version')}>
+            <input
+              className="input"
+              placeholder="e.g. 7.18.2"
+              value={form.routeros_version}
+              onChange={(e) => handleChange('routeros_version', e.target.value.trim())}
+            />
+          </Field>
+        </div>
+
+        <div className="border-t border-slate-100 pt-5">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">ISP uplinks</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Add every WAN connected to this MikroTik. Capacity and subscriber limits are monthly configuration values.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={addIsp}
+              className="shrink-0 rounded-md border border-indigo-200 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+            >
+              + Add ISP
+            </button>
+          </div>
+
+          {form.isps.length === 0 && (
+            <p className="rounded-md bg-slate-50 px-3 py-3 text-xs text-slate-500">
+              No ISP configured. Normal mode can still operate, but ISP capacity modes cannot be enabled.
+            </p>
+          )}
+
+          <div className="space-y-4">
+            {form.isps.map((isp, index) => (
+              <div key={isp.id || `new-${index}`} className="rounded-lg border border-slate-200 bg-slate-50/50 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="text-sm font-medium text-slate-700">ISP {index + 1}</p>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={isp.enabled}
+                        onChange={(e) => handleIspChange(index, 'enabled', e.target.checked)}
+                      />
+                      Enabled
+                    </label>
+                    <button type="button" onClick={() => removeIsp(index)} className="text-xs text-red-600 hover:text-red-700">
+                      Remove
+                    </button>
+                  </div>
+                </div>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <Field label="ISP name" error={fieldError(`isps.${index}.name`)}>
+                    <input required className="input" placeholder="e.g. Telecel" value={isp.name} onChange={(e) => handleIspChange(index, 'name', e.target.value)} />
+                  </Field>
+                  <Field label="WAN interface" error={fieldError(`isps.${index}.wan_interface`)}>
+                    <input required className="input" placeholder="e.g. ether1" value={isp.wan_interface} onChange={(e) => handleIspChange(index, 'wan_interface', e.target.value.trim())} />
+                  </Field>
+                  <Field label="Gateway IP" error={fieldError(`isps.${index}.gateway`)}>
+                    <input required className="input" placeholder="e.g. 192.168.1.1" value={isp.gateway} onChange={(e) => handleIspChange(index, 'gateway', e.target.value.trim())} />
+                  </Field>
+                  <Field label="Routing table" error={fieldError(`isps.${index}.routing_table`)}>
+                    <input required className="input" placeholder="e.g. to-telecel" value={isp.routing_table} onChange={(e) => handleIspChange(index, 'routing_table', e.target.value.trim())} />
+                  </Field>
+                  <Field label="Monthly capacity (GB)" error={fieldError(`isps.${index}.monthly_capacity_gb`)}>
+                    <input type="number" min="0.001" step="0.001" className="input" placeholder="Unlimited if blank" value={isp.monthly_capacity_gb} onChange={(e) => handleIspChange(index, 'monthly_capacity_gb', e.target.value)} />
+                  </Field>
+                  <Field label="Subscriber limit" error={fieldError(`isps.${index}.subscriber_limit`)}>
+                    <input type="number" min="1" step="1" className="input" placeholder="Unlimited if blank" value={isp.subscriber_limit} onChange={(e) => handleIspChange(index, 'subscriber_limit', e.target.value)} />
+                  </Field>
+                  <Field label="Priority" error={fieldError(`isps.${index}.priority`)}>
+                    <input type="number" min="1" step="1" required className="input" value={isp.priority} onChange={(e) => handleIspChange(index, 'priority', Number(e.target.value))} />
+                  </Field>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {form.isps.length > 1 && (
+            <div className="mt-4 rounded-lg border border-slate-200 p-4">
+              <p className="text-sm font-semibold text-slate-700">ISP failure policy</p>
+              <p className="mt-1 text-xs text-slate-400">
+                Lower ISP priority numbers are preferred. Failover uses the next enabled, healthy ISP with available capacity.
+              </p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <label className="flex items-start gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={form.isp_failover_enabled}
+                    onChange={(e) => handleChange('isp_failover_enabled', e.target.checked)}
+                  />
+                  <span>
+                    Automatic failover
+                    <span className="block text-xs text-slate-400">Move affected users when their assigned ISP is unavailable.</span>
+                  </span>
+                </label>
+                <label className={`flex items-start gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm ${form.isp_failover_enabled ? 'text-slate-700' : 'text-slate-400'}`}>
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    disabled={!form.isp_failover_enabled}
+                    checked={form.isp_failback_enabled}
+                    onChange={(e) => handleChange('isp_failback_enabled', e.target.checked)}
+                  />
+                  <span>
+                    Return on recovery
+                    <span className="block text-xs text-slate-400">Move users back to their preferred ISP after it becomes healthy.</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
         </div>
 
         {!isManual && (

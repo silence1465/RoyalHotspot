@@ -22,6 +22,7 @@ class PackageController extends Controller
         $routerIds = $request->attributes->get('admin_router_ids');
         if ($routerIds !== null) {
             $query->whereHas('routerProfiles', fn ($profiles) => $profiles->whereIn('router_id', $routerIds));
+            $query->with(['routerProfiles' => fn ($profiles) => $profiles->whereIn('router_id', $routerIds)->with('router:id,name')]);
         }
 
         if ($search = $request->query('search')) {
@@ -70,7 +71,10 @@ class PackageController extends Controller
     {
         $this->ensurePackageAccess($request, $package);
 
-        return response()->json($package->load('routerProfiles.router:id,name'));
+        $ids = $request->attributes->get('admin_router_ids');
+
+        return response()->json($package->load(['routerProfiles' => fn ($query) => $query
+            ->when($ids !== null, fn ($q) => $q->whereIn('router_id', $ids))->with('router:id,name')]));
     }
 
     public function update(PackageRequest $request, InternetPackage $package)
@@ -78,6 +82,7 @@ class PackageController extends Controller
         $data = $request->validated();
         $profiles = $data['profiles'] ?? null; // null = "not submitted", leave mappings untouched
         $this->ensurePackageAccess($request, $package);
+        $this->ensurePackageWriteAccess($request, $package);
         if ($profiles !== null) {
             $this->ensureProfileAccess($request, $profiles);
         }
@@ -104,6 +109,7 @@ class PackageController extends Controller
     public function destroy(Request $request, InternetPackage $package)
     {
         $this->ensurePackageAccess($request, $package);
+        $this->ensurePackageWriteAccess($request, $package);
         // Purchase::active() covers every active-equivalent status
         // (active, voucher_assigned, completed) — a single 'active' ===
         // check here would have missed voucher-fulfilled purchases
@@ -156,6 +162,16 @@ class PackageController extends Controller
                 'You cannot configure a package for an unassigned router.'
             );
         }
+    }
+
+    protected function ensurePackageWriteAccess(Request $request, InternetPackage $package): void
+    {
+        if (! $request->user() || $request->user()->isSuperAdmin()) {
+            return;
+        }
+        $ids = $request->user()->routers()->pluck('routers.id');
+        abort_if($package->routerProfiles()->whereNotIn('router_id', $ids)->exists(), 403,
+            'This shared package also affects routers outside your access. Contact a super administrator.');
     }
 
     /**
