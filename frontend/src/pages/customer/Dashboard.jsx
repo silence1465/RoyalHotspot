@@ -5,7 +5,7 @@ import api from '../../services/api';
 import StatusBadge from '../../components/StatusBadge';
 import CountdownTimer from '../../components/CountdownTimer';
 import { canPrepareConnection, connectionControl } from './connectionState';
-import { canBeginAutoConnect, shouldPollProvisioning, shouldRetryCurrentConnectionCheck } from './paymentAutoConnect';
+import { canBeginAutoConnect, shouldPollProvisioning, shouldRetryCurrentConnectionCheck, shouldRetryDashboardLoad } from './paymentAutoConnect';
 
 const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'currency', currency: c }).format(n || 0);
 
@@ -55,7 +55,10 @@ export default function CustomerDashboard() {
       }
     };
 
-    api.get('/customer/hotspot/sessions/current', { params: { router_id: Number(routerId) } })
+    api.get('/customer/hotspot/sessions/current', {
+      params: { router_id: Number(routerId) },
+      timeout: 5000,
+    })
       .then(({ data: current }) => {
         if (cancelled) return;
         if (current.connected === true) {
@@ -84,17 +87,44 @@ export default function CustomerDashboard() {
   }, [autoConnectRequested, currentCheckAttempt]);
 
   useEffect(() => {
-    Promise.all([
-      api.get('/customer/dashboard'),
-      api.get('/customer/free-trial').catch(() => ({ data: { campaign: null } })),
-    ])
-      .then(([dashboardResponse, freeTrialResponse]) => {
-        setData(dashboardResponse.data);
-        setHasFreeInternet(Boolean(freeTrialResponse.data?.campaign));
+    let cancelled = false;
+    let retryTimer;
+    let attempts = 0;
+
+    const loadDashboard = async () => {
+      attempts += 1;
+      try {
+        const response = await api.get('/customer/dashboard', { timeout: 10000 });
+        if (cancelled) return;
+        setData(response.data);
+        setError('');
+        setLoading(false);
+      } catch {
+        if (cancelled) return;
+        if (shouldRetryDashboardLoad({ requested: autoConnectRequested, attempts })) {
+          retryTimer = window.setTimeout(loadDashboard, 2000);
+          return;
+        }
+        setError('Could not load your dashboard. Please try again shortly.');
+        setLoading(false);
+      }
+    };
+
+    loadDashboard();
+
+    // Free-trial availability is optional dashboard decoration. It must
+    // never hold up a paid customer's automatic MikroTik login.
+    api.get('/customer/free-trial', { timeout: 5000 })
+      .then(({ data: freeTrial }) => {
+        if (!cancelled) setHasFreeInternet(Boolean(freeTrial?.campaign));
       })
-      .catch(() => setError('Could not load your dashboard. Please try again shortly.'))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [autoConnectRequested]);
 
   /**
    * "Connect to WiFi" — submits the customer's REAL hotspot username/
@@ -359,6 +389,14 @@ export default function CustomerDashboard() {
   const hasPortalContext = Boolean(sessionStorage.getItem('guest_login_url'));
   const accountReady = Boolean(credentials) && purchase?.status !== 'pending_activation';
   const connectionUi = connectionControl(connection.status, hasPortalContext, accountReady);
+  const cappedUsage = purchase?.usage_policy === 'data_cap' && Number(purchase.data_allowance_bytes) > 0
+    ? {
+        used: Number(purchase.cycle_bytes_used || 0),
+        allowance: Number(purchase.data_allowance_bytes),
+        remaining: Math.max(0, Number(purchase.data_allowance_bytes) - Number(purchase.cycle_bytes_used || 0)),
+        percent: Math.min(100, Math.round((Number(purchase.cycle_bytes_used || 0) / Number(purchase.data_allowance_bytes)) * 100)),
+      }
+    : null;
 
   return (
     <div className="space-y-6">
@@ -390,6 +428,16 @@ export default function CustomerDashboard() {
               <div className="h-full w-2/3 animate-pulse rounded-full bg-indigo-600" />
             </div>
           )}
+        </div>
+      )}
+
+      {purchase?.policy_access_status === 'data_exhausted' && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p className="font-semibold">Data allowance exhausted</p>
+          <p className="mt-1 text-xs">This package no longer provides internet access. You can purchase another package.</p>
+          <Link to="/buy" className="mt-3 inline-block rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700">
+            Buy another package
+          </Link>
         </div>
       )}
 
@@ -459,6 +507,18 @@ export default function CustomerDashboard() {
                   {formatBytes(purchase.fup_period === 'daily' ? bandwidthToday : purchase.cycle_bytes_used)} / {formatBytes(purchase.data_allowance_bytes)}
                 </dd>
               </div>
+            )}
+            {cappedUsage && (
+              <>
+                <div>
+                  <dt className="text-slate-400">Data remaining</dt>
+                  <dd className="text-slate-700">{formatBytes(cappedUsage.remaining)}</dd>
+                </div>
+                <div>
+                  <dt className="text-slate-400">Data used</dt>
+                  <dd className="text-slate-700">{cappedUsage.percent}%</dd>
+                </div>
+              </>
             )}
             <div>
               <dt className="text-slate-400">Time remaining</dt>

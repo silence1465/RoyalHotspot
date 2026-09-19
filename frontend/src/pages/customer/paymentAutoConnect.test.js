@@ -4,6 +4,7 @@ import {
   canBeginAutoConnect,
   paymentSuccessDestination,
   shouldRetryCurrentConnectionCheck,
+  shouldRetryDashboardLoad,
   shouldPollProvisioning,
 } from './paymentAutoConnect.js';
 
@@ -81,4 +82,10 @@ test('temporary router uncertainty is retried during post-payment auto-connect',
     status: 'unknown',
     attempts: 15,
   }), false);
+});
+
+test('temporary dashboard loading failure retries only during auto-connect', () => {
+  assert.equal(shouldRetryDashboardLoad({ requested: true, attempts: 1 }), true);
+  assert.equal(shouldRetryDashboardLoad({ requested: true, attempts: 6 }), false);
+  assert.equal(shouldRetryDashboardLoad({ requested: false, attempts: 1 }), false);
 });

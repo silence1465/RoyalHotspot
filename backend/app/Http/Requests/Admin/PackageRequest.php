@@ -2,11 +2,31 @@
 
 namespace App\Http\Requests\Admin;
 
+use App\Support\DataLimit;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class PackageRequest extends FormRequest
 {
+    protected function prepareForValidation(): void
+    {
+        if (in_array($this->input('usage_policy'), ['data_cap', 'fup'], true)
+            && is_numeric($this->input('data_allowance_value'))
+            && (float) $this->input('data_allowance_value') > 0
+            && in_array($this->input('data_allowance_unit', 'MB'), ['MB', 'GB'], true)) {
+            $notation = DataLimit::notation($this->input('data_allowance_value'), $this->input('data_allowance_unit', 'MB'));
+            $this->merge([
+                'data_limit' => $notation,
+                'data_allowance_bytes' => DataLimit::toBytes($notation),
+                'fup_period' => 'cycle',
+            ]);
+        }
+
+        if ($this->input('usage_policy') === 'none') {
+            $this->merge(['data_limit' => null, 'data_allowance_bytes' => null]);
+        }
+    }
+
     public function authorize(): bool
     {
         return true; // gated by the 'abilities:admin' route middleware
@@ -26,6 +46,8 @@ class PackageRequest extends FormRequest
             'usage_policy' => ['required', Rule::in(['none', 'fup', 'data_cap'])],
             'fup_period' => ['required_if:usage_policy,fup', Rule::in(['daily', 'cycle'])],
             'data_allowance_bytes' => ['nullable', 'required_unless:usage_policy,none', 'integer', 'min:1048576'],
+            'data_allowance_value' => ['nullable', 'numeric', 'gt:0'],
+            'data_allowance_unit' => ['nullable', 'required_with:data_allowance_value', Rule::in(['MB', 'GB'])],
             'tier1_threshold_percent' => ['required_if:usage_policy,fup', 'integer', 'min:1', 'max:98'],
             'tier2_threshold_percent' => ['required_if:usage_policy,fup', 'integer', 'min:2', 'max:99', 'gt:tier1_threshold_percent'],
             'tier1_speed_percent' => ['required_if:usage_policy,fup', 'integer', 'min:1', 'max:100'],
@@ -73,6 +95,14 @@ class PackageRequest extends FormRequest
                     'usage_policy',
                     'Tracked FUP and data-cap policies require live RouterOS fulfillment; imported voucher codes cannot be metered reliably.'
                 );
+            }
+
+            $profiles = $this->input('profiles', []);
+            $existingMappings = $this->route('package')?->routerProfiles()->exists() ?? false;
+            if (($this->input('status', 'active') === 'active')
+                && in_array($channel, ['subscription', 'both'], true)
+                && (! is_array($profiles) || count($profiles) === 0) && ! $existingMappings) {
+                $validator->errors()->add('profiles', 'An active live package must be mapped to at least one router and MikroTik profile.');
             }
         });
     }

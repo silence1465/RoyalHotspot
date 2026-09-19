@@ -43,7 +43,7 @@ class PackageController extends Controller
         $data = $request->validated();
         $profiles = $data['profiles'] ?? [];
         $this->ensureProfileAccess($request, $profiles);
-        unset($data['profiles']);
+        unset($data['profiles'], $data['data_allowance_value'], $data['data_allowance_unit']);
         $data['status'] = $data['status'] ?? 'active';
         $data['sales_channel'] = $data['sales_channel'] ?? 'subscription';
 
@@ -86,7 +86,7 @@ class PackageController extends Controller
         if ($profiles !== null) {
             $this->ensureProfileAccess($request, $profiles);
         }
-        unset($data['profiles']);
+        unset($data['profiles'], $data['data_allowance_value'], $data['data_allowance_unit']);
 
         DB::transaction(function () use ($package, $data, $profiles) {
             $package->update($data);

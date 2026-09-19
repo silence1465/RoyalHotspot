@@ -12,10 +12,10 @@ const emptyForm = {
   momo_bonus_value: 0,
   momo_bonus_unit: 'days',
   speed_limit: '',
-  data_limit: '',
   usage_policy: 'none',
   fup_period: 'cycle',
-  data_allowance_gb: '',
+  data_allowance_value: '',
+  data_allowance_unit: 'MB',
   tier1_threshold_percent: 60,
   tier2_threshold_percent: 85,
   tier1_speed_percent: 100,
@@ -38,10 +38,12 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
           momo_bonus_value: pkg.momo_bonus_value || 0,
           momo_bonus_unit: pkg.momo_bonus_unit || 'days',
           speed_limit: pkg.speed_limit || '',
-          data_limit: pkg.data_limit || '',
           usage_policy: pkg.usage_policy || 'none',
           fup_period: pkg.fup_period || 'cycle',
-          data_allowance_gb: pkg.data_allowance_bytes ? Number(pkg.data_allowance_bytes) / 1073741824 : '',
+          data_allowance_value: pkg.data_allowance_bytes
+            ? Number(pkg.data_allowance_bytes) / (Number(pkg.data_allowance_bytes) >= 1073741824 ? 1073741824 : 1048576)
+            : '',
+          data_allowance_unit: Number(pkg.data_allowance_bytes) >= 1073741824 ? 'GB' : 'MB',
           tier1_threshold_percent: pkg.tier1_threshold_percent ?? 60,
           tier2_threshold_percent: pkg.tier2_threshold_percent ?? 85,
           tier1_speed_percent: pkg.tier1_speed_percent ?? 100,
@@ -84,12 +86,10 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
     setErrors({});
     setServerError('');
 
-    const { data_allowance_gb, ...formValues } = form;
     const payload = {
-      ...formValues,
-      data_allowance_bytes: form.usage_policy === 'none' || data_allowance_gb === ''
-        ? null
-        : Math.round(Number(data_allowance_gb) * 1073741824),
+      ...form,
+      data_allowance_value: form.usage_policy === 'none' ? null : form.data_allowance_value,
+      data_allowance_unit: form.usage_policy === 'none' ? null : form.data_allowance_unit,
       profiles: profiles.filter((p) => p.router_id && p.profile_name),
     };
 
@@ -208,15 +208,6 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
             />
           </Field>
 
-          <Field label="Data Limit (optional, e.g. 2G)" error={fieldError('data_limit')}>
-            <input
-              className="input"
-              placeholder="Leave blank for unlimited"
-              value={form.data_limit}
-              onChange={(e) => handleChange('data_limit', e.target.value)}
-            />
-          </Field>
-
           <Field label="Status" error={fieldError('status')}>
             <select className="input" value={form.status} onChange={(e) => handleChange('status', e.target.value)}>
               <option value="active">Active</option>
@@ -239,8 +230,14 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
               </select>
             </Field>
             {form.usage_policy !== 'none' && (
-              <Field label="Data allowance (GB)" error={fieldError('data_allowance_bytes')}>
-                <input type="number" min="0.001" step="0.001" required className="input" value={form.data_allowance_gb} onChange={(e) => handleChange('data_allowance_gb', e.target.value)} />
+              <Field label="Data allowance" error={fieldError('data_allowance_value') || fieldError('data_allowance_unit') || fieldError('data_allowance_bytes')}>
+                <div className="flex gap-2">
+                  <input type="number" min="0.001" step="0.001" required className="input" value={form.data_allowance_value} onChange={(e) => handleChange('data_allowance_value', e.target.value)} />
+                  <select className="input max-w-24" value={form.data_allowance_unit} onChange={(e) => handleChange('data_allowance_unit', e.target.value)}>
+                    <option value="MB">MB</option>
+                    <option value="GB">GB</option>
+                  </select>
+                </div>
               </Field>
             )}
             {form.usage_policy === 'fup' && (
@@ -287,6 +284,7 @@ export default function PackageFormModal({ pkg, onClose, onSaved }) {
         </Field>
 
         <div>
+          {fieldError('profiles') && <p className="mb-2 text-xs text-red-600">{fieldError('profiles')}</p>}
           <div className="flex items-center justify-between mb-2">
             <label className="block text-sm font-medium text-slate-700">
               RouterOS Profile Mapping

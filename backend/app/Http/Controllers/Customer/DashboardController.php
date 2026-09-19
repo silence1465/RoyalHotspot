@@ -16,7 +16,13 @@ class DashboardController extends Controller
 
         $purchase = $customer->purchases()
             ->with(['package:id,name,duration_value,duration_unit,speed_limit,data_limit', 'router:id,name', 'voucher:id,code,duration_days'])
-            ->whereIn('status', ['active', 'voucher_assigned', 'completed', 'pending_activation'])
+            ->where(function ($query) {
+                $query->whereIn('status', ['active', 'voucher_assigned', 'completed', 'pending_activation'])
+                    ->orWhere(function ($exhausted) {
+                        $exhausted->where('status', 'expired')
+                            ->where('policy_access_status', 'data_exhausted');
+                    });
+            })
             ->latest()
             ->first();
 

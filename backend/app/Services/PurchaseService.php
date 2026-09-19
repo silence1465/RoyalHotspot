@@ -339,26 +339,36 @@ class PurchaseService
         return $purchase->fresh();
     }
 
-    public function expirePurchase(Purchase $purchase): void
+    public function expirePurchase(Purchase $purchase, string $reason = 'time_expired'): void
     {
         Cache::lock("hotspot-connect:{$purchase->customer_id}:{$purchase->router_id}", 120)
-            ->block(5, fn () => $this->expireLocked($purchase));
+            ->block(5, fn () => $this->expireLocked($purchase, $reason));
     }
 
-    protected function expireLocked(Purchase $purchase): void
+    protected function expireLocked(Purchase $purchase, string $reason): void
     {
-        DB::transaction(function () use ($purchase) {
+        DB::transaction(function () use ($purchase, $reason) {
             $purchase = Purchase::whereKey($purchase->id)->lockForUpdate()->firstOrFail();
             if ($purchase->status === 'expired') {
                 return;
             }
-            $purchase->update(['status' => 'expired']);
+            $dataExhausted = $reason === 'data_limit_reached';
+            if ($dataExhausted && ($purchase->usage_policy !== 'data_cap'
+                || ! $purchase->data_allowance_bytes
+                || $purchase->cycle_bytes_used < $purchase->data_allowance_bytes)) {
+                return;
+            }
+            $purchase->update([
+                'status' => 'expired',
+                'policy_access_status' => $dataExhausted ? 'data_exhausted' : $purchase->policy_access_status,
+                'usage_policy_applied_at' => $dataExhausted ? now() : $purchase->usage_policy_applied_at,
+            ]);
 
             HotspotSession::where('purchase_id', $purchase->id)
                 ->whereIn('status', ['connecting', 'active'])
                 ->update([
                     'status' => 'expired',
-                    'disconnect_reason' => 'purchase_expired',
+                    'disconnect_reason' => $reason,
                     'ended_at' => now(),
                 ]);
 
@@ -435,7 +445,12 @@ class PurchaseService
                     ->exists();
 
                 if (! $hasOtherActive) {
-                    $purchase->customer->update(['status' => 'inactive']);
+                    $purchase->customer->update([
+                        'status' => 'inactive',
+                        'current_purchase_id' => $purchase->customer->current_purchase_id === $purchase->id
+                            ? null
+                            : $purchase->customer->current_purchase_id,
+                    ]);
                 }
 
                 $nextQueued = Purchase::where('customer_id', $purchase->customer_id)
@@ -448,6 +463,14 @@ class PurchaseService
                     $this->fulfill($nextQueued);
                 }
             }
+
+            ActivityLog::record(
+                $dataExhausted ? 'purchase.data_limit_reached' : 'purchase.expired',
+                $dataExhausted
+                    ? "Purchase #{$purchase->id} {$purchase->reference} exhausted {$purchase->cycle_bytes_used}/{$purchase->data_allowance_bytes} bytes on router #{$purchase->router_id}."
+                    : "Purchase {$purchase->reference} expired.",
+                $purchase->customer_id ? ['customer_id' => $purchase->customer_id] : []
+            );
         });
     }
 

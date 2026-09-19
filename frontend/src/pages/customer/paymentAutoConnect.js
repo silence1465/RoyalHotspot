@@ -28,3 +28,7 @@ export function canBeginAutoConnect({
 export function shouldRetryCurrentConnectionCheck({ requested, status, attempts }) {
   return Boolean(requested && status === 'unknown' && attempts < 15);
 }
+
+export function shouldRetryDashboardLoad({ requested, attempts }) {
+  return Boolean(requested && attempts < 6);
+}

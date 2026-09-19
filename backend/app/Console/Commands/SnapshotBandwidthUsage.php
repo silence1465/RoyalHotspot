@@ -2,12 +2,12 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\ApplyUsagePolicyJob;
 use App\Models\BandwidthLog;
 use App\Models\HotspotUser;
-use App\Models\Router;
 use App\Models\Purchase;
-use App\Jobs\ApplyUsagePolicyJob;
-use App\Services\MikrotikService;
+use App\Models\Router;
+use App\Services\MikrotikServiceFactory;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -17,14 +17,17 @@ class SnapshotBandwidthUsage extends Command
 
     protected $description = 'Poll active sessions on every live router and accumulate bandwidth deltas into daily logs';
 
-    public function handle(): int
+    public function handle(MikrotikServiceFactory $mikrotikFactory): int
     {
         $today = now()->toDateString();
         $polled = 0;
 
         foreach (Router::where('connection_mode', 'live')->get() as $router) {
-            $mikrotik = new MikrotikService($router);
-            $result = $mikrotik->getActiveUsers();
+            $mikrotik = $mikrotikFactory->make($router);
+            // User counters persist after RouterOS removes an active session
+            // at limit-bytes-total. Polling only /ip hotspot active loses the
+            // terminal sample and leaves Laravel thinking the cap is unused.
+            $result = $mikrotik->getHotspotUsers();
 
             if (! $result['success']) {
                 continue;
@@ -36,30 +39,36 @@ class SnapshotBandwidthUsage extends Command
                     continue;
                 }
 
-                $hotspotUser = HotspotUser::where('router_id', $router->id)
-                    ->where('username', $username)
-                    ->first();
-
-                if (! $hotspotUser) {
-                    continue;
-                }
-
                 $currentIn = (int) ($session['bytes-in'] ?? 0);
                 $currentOut = (int) ($session['bytes-out'] ?? 0);
 
-                $deltaIn = $currentIn >= $hotspotUser->last_bytes_in
-                    ? $currentIn - $hotspotUser->last_bytes_in
-                    : $currentIn;
-                $deltaOut = $currentOut >= $hotspotUser->last_bytes_out
-                    ? $currentOut - $hotspotUser->last_bytes_out
-                    : $currentOut;
+                $purchaseId = DB::transaction(function () use ($username, $router, $today, $currentIn, $currentOut) {
+                    $hotspotUser = HotspotUser::where('router_id', $router->id)
+                        ->where('username', $username)
+                        ->lockForUpdate()
+                        ->first();
+                    if (! $hotspotUser) {
+                        return null;
+                    }
 
-                $purchaseId = DB::transaction(function () use ($hotspotUser, $router, $today, $deltaIn, $deltaOut, $currentIn, $currentOut) {
-                    $log = BandwidthLog::firstOrNew([
-                        'customer_id' => $hotspotUser->customer_id,
-                        'router_id' => $router->id,
-                        'date' => $today,
-                    ]);
+                    // A lower value means RouterOS reset the counter (new
+                    // purchase, reconnect, or admin reset). Count only the
+                    // new positive sample; never subtract or double-count.
+                    $deltaIn = $currentIn >= $hotspotUser->last_bytes_in
+                        ? $currentIn - $hotspotUser->last_bytes_in
+                        : $currentIn;
+                    $deltaOut = $currentOut >= $hotspotUser->last_bytes_out
+                        ? $currentOut - $hotspotUser->last_bytes_out
+                        : $currentOut;
+
+                    $log = BandwidthLog::where('customer_id', $hotspotUser->customer_id)
+                        ->where('router_id', $router->id)
+                        ->whereDate('date', $today)
+                        ->first() ?? new BandwidthLog([
+                            'customer_id' => $hotspotUser->customer_id,
+                            'router_id' => $router->id,
+                            'date' => $today,
+                        ]);
                     $log->bytes_in = ($log->bytes_in ?? 0) + $deltaIn;
                     $log->bytes_out = ($log->bytes_out ?? 0) + $deltaOut;
                     $log->save();
@@ -81,8 +90,9 @@ class SnapshotBandwidthUsage extends Command
                         ->lockForUpdate()
                         ->first();
 
-                    if ($purchase && in_array($purchase->usage_policy, ['fup', 'data_cap'], true)) {
+                    if ($purchase && in_array($purchase->usage_policy, ['fup', 'data_cap'], true) && ($deltaIn + $deltaOut) > 0) {
                         $purchase->increment('cycle_bytes_used', $deltaIn + $deltaOut);
+
                         return $purchase->id;
                     }
 
@@ -97,7 +107,7 @@ class SnapshotBandwidthUsage extends Command
             }
         }
 
-        $this->info("Polled {$polled} active session(s) across live routers.");
+        $this->info("Polled {$polled} hotspot user counter(s) across live routers.");
 
         return self::SUCCESS;
     }
