@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Eye, EyeOff, Gift, Wifi } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, Gift, Loader2, Wifi } from 'lucide-react';
 import api from '../../services/api';
 import StatusBadge from '../../components/StatusBadge';
 import CountdownTimer from '../../components/CountdownTimer';
@@ -11,6 +11,7 @@ const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'curr
 
 export default function CustomerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const autoConnectRequested = searchParams.get('auto_connect') === '1';
   const autoConnectStarted = useRef(false);
   const provisioningAttempts = useRef(0);
   const pendingSessionOnLoad = useRef(
@@ -313,7 +314,18 @@ export default function CustomerDashboard() {
     handleConnectToWifi(credentials, purchase.id);
   }, [connection.status, currentConnectionChecked, data, handleConnectToWifi, searchParams]);
 
-  if (loading) return <p className="text-sm text-slate-400">Loading…</p>;
+  if (loading) {
+    return autoConnectRequested ? (
+      <div className="mx-auto max-w-md py-12 text-center" role="status" aria-live="polite">
+        <Loader2 className="mx-auto mb-4 h-12 w-12 animate-spin text-indigo-600" />
+        <h1 className="text-xl font-semibold text-slate-900">Preparing your connection</h1>
+        <p className="mt-2 text-sm text-slate-500">Loading your paid package and WiFi credentials&hellip;</p>
+        <div className="mx-auto mt-6 h-1.5 max-w-xs overflow-hidden rounded-full bg-indigo-100">
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-indigo-600" />
+        </div>
+      </div>
+    ) : <p className="text-sm text-slate-400">Loading…</p>;
+  }
   if (error) {
     return <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">{error}</div>;
   }
@@ -337,8 +349,28 @@ export default function CustomerDashboard() {
       </div>
 
       {connection.message && (
-        <div className={`rounded-md border px-4 py-3 text-sm ${connection.status === 'active' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : connection.status === 'failed' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-indigo-50 border-indigo-200 text-indigo-700'}`}>
-          {connection.message}
+        <div
+          role="status"
+          aria-live="polite"
+          className={`rounded-md border px-4 py-3 text-sm ${connection.status === 'active' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : connection.status === 'failed' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-indigo-50 border-indigo-200 text-indigo-700'}`}
+        >
+          <div className="flex items-center gap-3">
+            {(connection.status === 'connecting' || connection.status === 'checking') && (
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+            )}
+            {connection.status === 'active' && <CheckCircle2 className="h-5 w-5 shrink-0" />}
+            <div>
+              <p className="font-medium">{connection.message}</p>
+              {(connection.status === 'connecting' || connection.status === 'checking') && (
+                <p className="mt-0.5 text-xs opacity-80">Please keep this page open. This normally takes a few seconds.</p>
+              )}
+            </div>
+          </div>
+          {(connection.status === 'connecting' || connection.status === 'checking') && (
+            <div className="mt-3 h-1 overflow-hidden rounded-full bg-indigo-100">
+              <div className="h-full w-2/3 animate-pulse rounded-full bg-indigo-600" />
+            </div>
+          )}
         </div>
       )}
 
@@ -447,8 +479,9 @@ export default function CustomerDashboard() {
                 <button
                   onClick={() => handleConnectToWifi(credentials, purchase.id)}
                   disabled={connectionUi.disabled}
-                  className="w-full bg-indigo-600 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white rounded-md py-2.5 text-sm font-medium hover:bg-indigo-700 mb-4"
+                  className="flex w-full items-center justify-center gap-2 bg-indigo-600 disabled:bg-indigo-300 disabled:cursor-not-allowed text-white rounded-md py-2.5 text-sm font-medium hover:bg-indigo-700 mb-4"
                 >
+                  {connectionUi.kind === 'connecting' && <Loader2 className="h-4 w-4 animate-spin" />}
                   {connectionUi.label}
                 </button>
               )}
