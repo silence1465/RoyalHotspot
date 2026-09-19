@@ -24,3 +24,7 @@ export function canBeginAutoConnect({
       && canPrepareConnection(connectionStatus, currentCheckComplete),
   );
 }
+
+export function shouldRetryCurrentConnectionCheck({ requested, status, attempts }) {
+  return Boolean(requested && status === 'unknown' && attempts < 15);
+}

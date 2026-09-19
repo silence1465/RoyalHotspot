@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   canBeginAutoConnect,
   paymentSuccessDestination,
+  shouldRetryCurrentConnectionCheck,
   shouldPollProvisioning,
 } from './paymentAutoConnect.js';
 
@@ -61,5 +62,23 @@ test('missing portal context and provisioning timeout stop automatic connection'
     hasPurchase: true,
     hasCredentials: false,
     attempts: 30,
+  }), false);
+});
+
+test('temporary router uncertainty is retried during post-payment auto-connect', () => {
+  assert.equal(shouldRetryCurrentConnectionCheck({
+    requested: true,
+    status: 'unknown',
+    attempts: 1,
+  }), true);
+  assert.equal(shouldRetryCurrentConnectionCheck({
+    requested: true,
+    status: 'disconnected',
+    attempts: 1,
+  }), false);
+  assert.equal(shouldRetryCurrentConnectionCheck({
+    requested: true,
+    status: 'unknown',
+    attempts: 15,
   }), false);
 });

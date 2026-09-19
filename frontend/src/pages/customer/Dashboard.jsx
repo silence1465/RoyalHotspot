@@ -5,7 +5,7 @@ import api from '../../services/api';
 import StatusBadge from '../../components/StatusBadge';
 import CountdownTimer from '../../components/CountdownTimer';
 import { canPrepareConnection, connectionControl } from './connectionState';
-import { canBeginAutoConnect, shouldPollProvisioning } from './paymentAutoConnect';
+import { canBeginAutoConnect, shouldPollProvisioning, shouldRetryCurrentConnectionCheck } from './paymentAutoConnect';
 
 const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'currency', currency: c }).format(n || 0);
 
@@ -28,6 +28,7 @@ export default function CustomerDashboard() {
   const [wifiPasswordMessage, setWifiPasswordMessage] = useState('');
   const [wifiPasswordError, setWifiPasswordError] = useState('');
   const [connection, setConnection] = useState({ status: '', message: '' });
+  const [currentCheckAttempt, setCurrentCheckAttempt] = useState(0);
   const [currentConnectionChecked, setCurrentConnectionChecked] = useState(
     !sessionStorage.getItem('portal_router_id')
       || Boolean(pendingSessionOnLoad.current),
@@ -39,7 +40,20 @@ export default function CustomerDashboard() {
     if (!routerId || pendingConfirmation) return undefined;
 
     let cancelled = false;
+    let retryTimer;
     setConnection({ status: 'checking', message: 'Checking your WiFi connection...' });
+
+    const retryIfNeeded = (status) => {
+      if (shouldRetryCurrentConnectionCheck({
+        requested: autoConnectRequested,
+        status,
+        attempts: currentCheckAttempt + 1,
+      })) {
+        retryTimer = window.setTimeout(() => {
+          if (!cancelled) setCurrentCheckAttempt((attempt) => attempt + 1);
+        }, 2000);
+      }
+    };
 
     api.get('/customer/hotspot/sessions/current', { params: { router_id: Number(routerId) } })
       .then(({ data: current }) => {
@@ -48,6 +62,7 @@ export default function CustomerDashboard() {
           setConnection({ status: 'active', message: 'Connected. Your internet is active.' });
         } else if (current.status === 'unknown') {
           setConnection({ status: 'unknown', message: 'Your WiFi connection could not be checked right now.' });
+          retryIfNeeded('unknown');
         } else {
           setConnection({ status: '', message: '' });
         }
@@ -55,14 +70,18 @@ export default function CustomerDashboard() {
       .catch(() => {
         if (!cancelled) {
           setConnection({ status: 'unknown', message: 'Your WiFi connection could not be checked right now.' });
+          retryIfNeeded('unknown');
         }
       })
       .finally(() => {
         if (!cancelled) setCurrentConnectionChecked(true);
       });
 
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [autoConnectRequested, currentCheckAttempt]);
 
   useEffect(() => {
     Promise.all([
