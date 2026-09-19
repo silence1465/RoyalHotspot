@@ -85,7 +85,10 @@ class PaystackPaymentVerifier
                 ]);
 
                 if ($locked->purchase) {
-                    $this->purchaseService->verifyAndFulfill($locked->purchase, 'paystack_verification');
+                    // Keep the existing persisted enum value. It represents
+                    // Paystack's server-side verification path whether the
+                    // trigger was the webhook or the authenticated callback.
+                    $this->purchaseService->verifyAndFulfill($locked->purchase, 'paystack_webhook');
                 }
 
                 ActivityLog::record(

@@ -249,7 +249,7 @@ class SecurityPenetrationTest extends TestCase
         $this->assertSame('card', $payment->channel);
         $this->assertNotNull($payment->paid_at);
         $this->assertSame('active', $purchase->status);
-        $this->assertSame('paystack_verification', $purchase->verification_method);
+        $this->assertSame('paystack_webhook', $purchase->verification_method);
         $this->assertNotNull($purchase->verified_at);
         Queue::assertPushed(ActivateHotspotUserJob::class, 1);
         $this->assertDatabaseCount('payments', 1);
