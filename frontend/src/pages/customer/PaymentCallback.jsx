@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
 import api from '../../services/api';
 
 export default function PaymentCallback() {
   const [params] = useSearchParams();
+  const navigate = useNavigate();
   const reference = params.get('reference') || params.get('trxref');
   const [state, setState] = useState(reference ? 'verifying' : 'error');
   const [message, setMessage] = useState(reference
@@ -26,7 +27,11 @@ export default function PaymentCallback() {
 
         if (data.success) {
           setState('success');
-          setMessage(data.message || 'Payment verified. Your internet package is being prepared.');
+          setMessage('Payment verified. Preparing your automatic WiFi connection…');
+          // MikroTik login must be submitted by this browser from the
+          // hotspot device. The dashboard already waits for asynchronous
+          // provisioning and performs that browser-side login safely.
+          navigate('/dashboard?auto_connect=1', { replace: true });
           return;
         }
 
@@ -66,7 +71,7 @@ export default function PaymentCallback() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [reference]);
+  }, [navigate, reference]);
 
   const Icon = state === 'success'
     ? CheckCircle2
@@ -90,7 +95,7 @@ export default function PaymentCallback() {
       <p className="mb-1 text-sm text-slate-500">{message}</p>
       {reference && <p className="mb-6 font-mono text-xs text-slate-400">Ref: {reference}</p>}
       <Link
-        to="/dashboard"
+        to="/dashboard?auto_connect=1"
         className="inline-block rounded-md bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
       >
         Go to Dashboard
