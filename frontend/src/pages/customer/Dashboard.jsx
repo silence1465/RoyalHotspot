@@ -5,6 +5,7 @@ import api from '../../services/api';
 import StatusBadge from '../../components/StatusBadge';
 import CountdownTimer from '../../components/CountdownTimer';
 import { canPrepareConnection, connectionControl } from './connectionState';
+import { canBeginAutoConnect, shouldPollProvisioning } from './paymentAutoConnect';
 
 const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'currency', currency: c }).format(n || 0);
 
@@ -255,15 +256,20 @@ export default function CustomerDashboard() {
       (data.hotspot_credentials && !data.hotspot_credentials.disabled) || data.voucher,
     );
     const canConnectHere = Boolean(sessionStorage.getItem('guest_login_url'));
-    if (hasCredentials || !canConnectHere || !data.purchase) return undefined;
-
-    if (provisioningAttempts.current >= 30) {
+    if (!hasCredentials && canConnectHere && data.purchase && provisioningAttempts.current >= 30) {
       setConnection({
         status: 'failed',
         message: 'Your hotspot account is taking longer than expected to activate. Tap Connect to WiFi shortly.',
       });
       return undefined;
     }
+    if (!shouldPollProvisioning({
+      requested: true,
+      hasPortalContext: canConnectHere,
+      hasPurchase: Boolean(data.purchase),
+      hasCredentials,
+      attempts: provisioningAttempts.current,
+    })) return undefined;
 
     setConnection({ status: 'connecting', message: 'Activating your hotspot account...' });
     const timer = window.setTimeout(async () => {
@@ -281,7 +287,7 @@ export default function CustomerDashboard() {
   }, [connection.status, currentConnectionChecked, data, searchParams]);
 
   useEffect(() => {
-    if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current || !canPrepareConnection(connection.status, currentConnectionChecked)) {
+    if (!data || autoConnectStarted.current) {
       return;
     }
 
@@ -290,7 +296,14 @@ export default function CustomerDashboard() {
       ? data.hotspot_credentials
       : (data.voucher ? { username: data.voucher.code, password: data.voucher.code } : null);
 
-    if (!purchase || !credentials || !sessionStorage.getItem('guest_login_url')) {
+    if (!canBeginAutoConnect({
+      requested: searchParams.get('auto_connect') === '1',
+      hasPortalContext: Boolean(sessionStorage.getItem('guest_login_url')),
+      hasPurchase: Boolean(purchase),
+      hasCredentials: Boolean(credentials),
+      connectionStatus: connection.status,
+      currentCheckComplete: currentConnectionChecked,
+    })) {
       return;
     }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
 import api from '../../services/api';
+import { paymentSuccessDestination } from './paymentAutoConnect';
 
 export default function PaymentCallback() {
   const [params] = useSearchParams();
@@ -31,7 +32,7 @@ export default function PaymentCallback() {
           // MikroTik login must be submitted by this browser from the
           // hotspot device. The dashboard already waits for asynchronous
           // provisioning and performs that browser-side login safely.
-          navigate('/dashboard?auto_connect=1', { replace: true });
+          navigate(paymentSuccessDestination(Boolean(sessionStorage.getItem('guest_login_url'))), { replace: true });
           return;
         }
 
@@ -95,7 +96,7 @@ export default function PaymentCallback() {
       <p className="mb-1 text-sm text-slate-500">{message}</p>
       {reference && <p className="mb-6 font-mono text-xs text-slate-400">Ref: {reference}</p>}
       <Link
-        to="/dashboard?auto_connect=1"
+        to={paymentSuccessDestination(Boolean(sessionStorage.getItem('guest_login_url')))}
         className="inline-block rounded-md bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
       >
         Go to Dashboard
