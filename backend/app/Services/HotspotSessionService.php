@@ -211,6 +211,8 @@ class HotspotSessionService
 
         $session->update([
             'mikrotik_session_id' => $match['.id'] ?? $session->mikrotik_session_id,
+            'mac_address' => $this->normalizeMac($match['mac-address'] ?? null) ?? $session->mac_address,
+            'ip_address' => $match['address'] ?? $session->ip_address,
             'last_seen_at' => now(),
         ]);
 
@@ -315,6 +317,8 @@ class HotspotSessionService
                 $session->update([
                     'status' => 'active',
                     'mikrotik_session_id' => $match['.id'] ?? null,
+                    'mac_address' => $this->normalizeMac($match['mac-address'] ?? null) ?? $session->mac_address,
+                    'ip_address' => $match['address'] ?? $session->ip_address,
                     'started_at' => now(),
                     'last_seen_at' => now(),
                     'failure_message' => null,
@@ -387,11 +391,30 @@ class HotspotSessionService
             return false;
         }
 
-        if ($session->mac_address && $this->normalizeMac($active['mac-address'] ?? null) !== $session->mac_address) {
-            return false;
+        // Once this purchase has started, the RouterOS username is the
+        // stable identity boundary. Device-private MAC rotation and DHCP
+        // changes are connection metadata and must not invalidate or extend
+        // an already-started package.
+        if ($session->purchase?->starts_at !== null) {
+            return true;
         }
 
-        return ! $session->ip_address || ($active['address'] ?? null) === $session->ip_address;
+        $sessionMac = $this->normalizeMac($session->mac_address);
+        $activeMac = $this->normalizeMac($active['mac-address'] ?? null);
+
+        // During the initial browser-driven login, a matching current MAC is
+        // sufficient even when the portal-observed IP differs from RouterOS.
+        if ($sessionMac && $activeMac) {
+            return hash_equals($sessionMac, $activeMac);
+        }
+
+        // Some portals/API responses cannot provide a MAC. In that case use
+        // the current IP only as a fallback, never as permanent identity.
+        $activeIp = $active['address'] ?? null;
+
+        return filled($session->ip_address)
+            && filled($activeIp)
+            && hash_equals((string) $session->ip_address, (string) $activeIp);
     }
 
     protected function sessionPayload(HotspotSession $session): array
