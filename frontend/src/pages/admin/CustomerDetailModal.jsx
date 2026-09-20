@@ -8,11 +8,12 @@ import { useAuth } from '../../context/AuthContext';
 
 const currency = (n) => new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(n || 0);
 
-export default function CustomerDetailModal({ customer, onClose }) {
+export default function CustomerDetailModal({ customer, onClose, onDeleted }) {
   const { user } = useAuth();
   const [resettingId, setResettingId] = useState(null);
   const [resetResult, setResetResult] = useState(null);
   const [resetError, setResetError] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const canResetPassword = user?.role === 'super_admin' || user?.permissions == null || user?.permissions?.includes('customers.manage');
   const subscriptionsPagination = useClientPagination(customer.subscriptions || []);
   const paymentsPagination = useClientPagination(customer.payments || []);
@@ -29,6 +30,25 @@ export default function CustomerDetailModal({ customer, onClose }) {
       setResetError(error.response?.data?.message || 'Could not reset the Wi-Fi password.');
     } finally {
       setResettingId(null);
+    }
+  };
+
+  const deleteTestData = async () => {
+    const confirmation = window.prompt(
+      `Permanently delete ${customer.full_name}, all purchases, payments, usage logs, sessions, and MikroTik accounts?\n\nType DELETE TEST DATA to continue.`
+    );
+    if (confirmation !== 'DELETE TEST DATA') return;
+    setDeleting(true);
+    setResetError('');
+    try {
+      await api.delete(`/admin/customers/${customer.id}/test-data`, {
+        data: { confirmation },
+      });
+      onDeleted?.();
+    } catch (error) {
+      setResetError(error.response?.data?.message || 'Could not delete the test customer data.');
+    } finally {
+      setDeleting(false);
     }
   };
   return (
@@ -143,6 +163,20 @@ export default function CustomerDetailModal({ customer, onClose }) {
         </table>
         <TablePagination {...paymentsPagination} onPageChange={paymentsPagination.setPage} />
       </div>
+
+      {user?.role === 'super_admin' && (
+        <div className="mt-6 border-t border-red-100 pt-4">
+          <button
+            type="button"
+            disabled={deleting}
+            onClick={deleteTestData}
+            className="rounded-md border border-red-300 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+          >
+            {deleting ? 'Deleting test data…' : 'Delete Test Customer and Purchases'}
+          </button>
+          <p className="mt-1 text-xs text-slate-400">Cancel active purchases first. This permanently removes the selected test customer and associated records.</p>
+        </div>
+      )}
     </Modal>
   );
 }

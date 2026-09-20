@@ -184,6 +184,8 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/customers', [CustomerController::class, 'index'])->middleware('admin-permission:customers.view');
         Route::get('/customers/{customer}', [CustomerController::class, 'show'])->middleware('admin-permission:customers.view');
+        Route::delete('/customers/{customer}/test-data', [CustomerController::class, 'destroyTestData'])
+            ->middleware('role:super_admin');
         Route::post('/customers/{customer}/hotspot-users/{hotspotUser}/reset-password', [CustomerController::class, 'resetHotspotPassword'])
             ->middleware(['admin-permission:customers.manage', 'mikrotik-unlocked']);
 

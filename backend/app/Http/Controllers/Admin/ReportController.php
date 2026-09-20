@@ -165,7 +165,10 @@ class ReportController extends Controller
 
     public function customers(Request $request)
     {
-        $query = Customer::query();
+        $query = Customer::with([
+            'currentPurchase.router:id,name,location',
+            'hotspotUsers.router:id,name,location',
+        ]);
         $routerIds = AdminRouterScope::ids($request);
         if ($routerIds !== null) {
             $query->whereHas('purchases', fn ($p) => $p->whereIn('router_id', $routerIds));

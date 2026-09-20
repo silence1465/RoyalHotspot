@@ -128,6 +128,7 @@ export default function AdminCustomers() {
               <th className="px-5 py-3 font-medium">Name</th>
               <th className="px-5 py-3 font-medium">Phone</th>
               <th className="px-5 py-3 font-medium">Username</th>
+              <th className="px-5 py-3 font-medium">Router / Location</th>
               <th className="px-5 py-3 font-medium">Registered</th>
               <th className="px-5 py-3 font-medium">Status</th>
             </tr>
@@ -135,12 +136,12 @@ export default function AdminCustomers() {
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={5} className="px-5 py-6 text-center text-slate-400">Loading…</td>
+                <td colSpan={6} className="px-5 py-6 text-center text-slate-400">Loading…</td>
               </tr>
             )}
             {!loading && customers.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-5 py-6 text-center text-slate-400">No customers found.</td>
+                <td colSpan={6} className="px-5 py-6 text-center text-slate-400">No customers found.</td>
               </tr>
             )}
             {!loading &&
@@ -153,6 +154,15 @@ export default function AdminCustomers() {
                   <td className="px-5 py-3 font-medium text-slate-900">{c.full_name}</td>
                   <td className="px-5 py-3 text-slate-600">{c.phone}</td>
                   <td className="px-5 py-3 text-slate-600">{c.username}</td>
+                  <td className="px-5 py-3 text-slate-600">
+                    {customerRouters(c).map((router) => (
+                      <div key={router.id}>
+                        <span className="font-medium text-slate-700">{router.name}</span>
+                        {router.location && <span className="block text-xs text-slate-400">{router.location}</span>}
+                      </div>
+                    ))}
+                    {customerRouters(c).length === 0 && '—'}
+                  </td>
                   <td className="px-5 py-3 text-slate-600">{new Date(c.created_at).toLocaleDateString()}</td>
                   <td className="px-5 py-3">
                     <StatusBadge status={c.status} />
@@ -164,7 +174,16 @@ export default function AdminCustomers() {
         <TablePagination {...pagination} onPageChange={pagination.setPage} />
       </div>
 
-      {detail && <CustomerDetailModal customer={detail} onClose={() => setDetail(null)} />}
+      {detail && (
+        <CustomerDetailModal
+          customer={detail}
+          onClose={() => setDetail(null)}
+          onDeleted={() => {
+            setDetail(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -176,4 +195,13 @@ function MiniStat({ label, value, tone = 'text-slate-900' }) {
       <p className={`text-lg font-semibold ${tone}`}>{value}</p>
     </div>
   );
+}
+
+function customerRouters(customer) {
+  const routers = [
+    customer.current_purchase?.router,
+    ...(customer.hotspot_users || []).map((user) => user.router),
+  ].filter(Boolean);
+
+  return [...new Map(routers.map((router) => [router.id, router])).values()];
 }

@@ -93,8 +93,8 @@ class MikrotikAdminSecurityTest extends TestCase
 
         $this->withToken($token)->postJson('/api/v1/admin/router-management/'.$router->id.'/terminal', [
             'command' => '/system reset-configuration',
-        ])->assertUnprocessable()
-            ->assertJsonPath('message', 'Only approved read-only print, ping, and traceroute commands are allowed.');
+        ])->assertForbidden()
+            ->assertJsonPath('message', 'Only a super administrator can change router configuration from the terminal.');
 
         $this->withToken($token)->patchJson('/api/v1/admin/router-management/'.$router->id.'/bindings/*1/status', [
             'active' => 'not-a-boolean',

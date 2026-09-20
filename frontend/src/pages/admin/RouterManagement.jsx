@@ -622,10 +622,20 @@ export default function RouterManagement() {
   };
 
   const runTerminal = async (command) => {
+    const readOnly = /\s(?:print|monitor|get)(?:\s|$)/i.test(command)
+      || /^\/(?:ping|tool(?:\/|\s+)traceroute)(?:\s|$)/i.test(command);
+    let confirmation;
+    if (!readOnly) {
+      const approved = window.confirm(
+        `Execute this router-changing command on ${router?.name || 'the router'}?\n\n${command}\n\nThis can interrupt service or make the router unreachable.`
+      );
+      if (!approved) return [];
+      confirmation = 'EXECUTE';
+    }
     setBusy(true);
     setError('');
     try {
-      const response = await api.post(`/admin/router-management/${routerId}/terminal`, { command });
+      const response = await api.post(`/admin/router-management/${routerId}/terminal`, { command, confirmation });
       return response.data.data || [];
     } catch (requestError) {
       const message = requestError.response?.data?.message || 'The command could not be completed.';
@@ -1010,7 +1020,7 @@ function TerminalConsole({ command, setCommand, entries, setEntries, execute, bu
 }
 
 function TerminalHeader({ routerName, clear }) {
-  return <div className='flex items-center justify-between border-b border-slate-800 p-4'><div><h2 className='flex gap-2 font-semibold text-white'><TerminalSquare className='h-5 w-5 text-emerald-400' />RouterOS terminal</h2><p className='text-xs text-slate-400'>{routerName || 'Router'} - secured read-only console</p></div><button type='button' onClick={clear} className='rounded border border-slate-700 px-3 py-1 text-xs'>Clear</button></div>;
+  return <div className='flex items-center justify-between border-b border-slate-800 p-4'><div><h2 className='flex gap-2 font-semibold text-white'><TerminalSquare className='h-5 w-5 text-emerald-400' />RouterOS terminal</h2><p className='text-xs text-slate-400'>{routerName || 'Router'} - full commands require super admin confirmation and are audited</p></div><button type='button' onClick={clear} className='rounded border border-slate-700 px-3 py-1 text-xs'>Clear</button></div>;
 }
 
 function TerminalOutput({ entries, routerName }) {

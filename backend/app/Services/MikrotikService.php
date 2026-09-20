@@ -623,6 +623,48 @@ class MikrotikService
         });
     }
 
+    /** Execute one RouterOS API command; authorization is enforced by the controller. */
+    public function executeTerminal(string $command): array
+    {
+        $parts = array_values(array_filter(str_getcsv(trim($command), ' ', '"', '\\'), fn ($part) => $part !== ''));
+        $first = array_shift($parts);
+        if (! $first || ! str_starts_with($first, '/')) {
+            return ['success' => false, 'error' => 'RouterOS commands must start with /.'];
+        }
+
+        $pathParts = [trim($first, '/')];
+        $arguments = [];
+        $where = false;
+        foreach ($parts as $part) {
+            if (strtolower($part) === 'where') {
+                $where = true;
+
+                continue;
+            }
+            if (! str_contains($part, '=') && ! str_starts_with($part, '?') && empty($arguments) && ! $where) {
+                $pathParts[] = trim($part, '/');
+
+                continue;
+            }
+            $arguments[] = [$part, $where];
+        }
+
+        $path = '/'.implode('/', $pathParts);
+
+        return $this->runProvisioning('terminal-command', function (Client $client) use ($path, $arguments) {
+            $query = new Query($path);
+            foreach ($arguments as [$part, $isWhere]) {
+                $part = ltrim($part, '?');
+                [$name, $value] = array_pad(explode('=', $part, 2), 2, null);
+                if ($value !== null) {
+                    $query = $isWhere ? $query->where($name, $value) : $query->equal($name, $value);
+                }
+            }
+
+            return $client->query($query)->read();
+        });
+    }
+
     public function getBridges(): array
     {
         return $this->provisioningPrint('get-bridges', '/interface/bridge/print');

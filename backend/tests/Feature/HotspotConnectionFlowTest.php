@@ -27,7 +27,11 @@ class HotspotConnectionFlowTest extends TestCase
 
     public function test_embedded_routeros_command_error_is_not_treated_as_success(): void
     {
-        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $router = Router::factory()->create([
+            'connection_mode' => 'live',
+            'provisioning_api_username' => 'provisioner',
+            'provisioning_api_password' => 'provisioning-password',
+        ]);
         $service = new class($router) extends MikrotikService
         {
             public function detect(mixed $result): ?string
@@ -41,6 +45,31 @@ class HotspotConnectionFlowTest extends TestCase
             $service->detect(['after' => ['message' => 'input does not match any value of profile']])
         );
         $this->assertNull($service->detect([['.id' => '*1', 'name' => 'valid-user']]));
+    }
+
+    public function test_full_terminal_translates_one_confirmed_routeros_command_to_api_path(): void
+    {
+        $router = Router::factory()->create([
+            'connection_mode' => 'live',
+            'provisioning_api_username' => 'provisioner',
+            'provisioning_api_password' => 'provisioning-password',
+        ]);
+        $client = Mockery::mock(Client::class);
+        $captured = null;
+        $client->shouldReceive('query')->once()->andReturnUsing(function ($query) use ($client, &$captured) {
+            $captured = $query->getQuery();
+
+            return $client;
+        });
+        $client->shouldReceive('read')->once()->andReturn([]);
+        $service = Mockery::mock(MikrotikService::class, [$router])->makePartial()->shouldAllowMockingProtectedMethods();
+        $service->shouldReceive('connectProvisioning')->once()->andReturn($client);
+
+        $result = $service->executeTerminal('/system identity set name=remote-router');
+
+        $this->assertTrue($result['success']);
+        $this->assertSame('/system/identity/set', $captured[0]);
+        $this->assertContains('=name=remote-router', $captured);
     }
 
     public function test_customer_sees_only_their_router_session_and_router_confirms_it(): void

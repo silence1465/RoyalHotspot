@@ -10,6 +10,7 @@ use App\Models\HotspotUser;
 use App\Services\MikrotikServiceFactory;
 use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class CustomerController extends Controller
@@ -105,6 +106,70 @@ class CustomerController extends Controller
             'username' => $hotspotUser->username,
             'temporary_password' => $password,
             'router_id' => $hotspotUser->router_id,
+        ]);
+    }
+
+    public function destroyTestData(Request $request, Customer $customer, MikrotikServiceFactory $mikrotikFactory)
+    {
+        $request->validate(['confirmation' => ['required', 'in:DELETE TEST DATA']]);
+
+        if ($customer->purchases()->active()->exists()) {
+            return response()->json([
+                'message' => 'Cancel or expire this customer’s active purchase before deleting test data.',
+            ], 422);
+        }
+
+        $hotspotUsers = $customer->hotspotUsers()->with('router')->get();
+        foreach ($hotspotUsers as $hotspotUser) {
+            if (! $hotspotUser->router || $hotspotUser->router->isManual()) {
+                continue;
+            }
+            $mikrotik = $mikrotikFactory->make($hotspotUser->router);
+            $disconnect = $mikrotik->disableAndDisconnectHotspotUser($hotspotUser->username, $hotspotUser->mikrotik_user_id);
+            if (! $disconnect['success']) {
+                return response()->json([
+                    'message' => "Could not disconnect {$hotspotUser->username} from {$hotspotUser->router->name}: ".($disconnect['error'] ?? 'unknown error'),
+                ], 502);
+            }
+            if ($hotspotUser->mikrotik_user_id) {
+                $removed = $mikrotik->removeHotspotUser($hotspotUser->mikrotik_user_id);
+                if (! $removed['success']) {
+                    return response()->json([
+                        'message' => "The session was disconnected, but the test user could not be removed from {$hotspotUser->router->name}: ".($removed['error'] ?? 'unknown error'),
+                    ], 502);
+                }
+            }
+        }
+
+        $summary = [
+            'customer_id' => $customer->id,
+            'username' => $customer->username,
+            'purchases' => $customer->purchases()->count(),
+            'payments' => $customer->payments()->count(),
+            'hotspot_users' => $hotspotUsers->count(),
+        ];
+
+        DB::transaction(function () use ($customer) {
+            $customer->update(['current_purchase_id' => null]);
+            DB::table('vouchers')->where('used_by_customer_id', $customer->id)->update(['used_by_customer_id' => null, 'used_at' => null]);
+            DB::table('vouchers')->where('assigned_to', $customer->id)->update(['assigned_to' => null, 'assigned_at' => null]);
+            DB::table('payments')->where('customer_id', $customer->id)->delete();
+            DB::table('orders')->where('customer_id', $customer->id)->delete();
+            DB::table('subscriptions')->where('customer_id', $customer->id)->delete();
+            $customer->purchases()->delete();
+            $customer->tokens()->delete();
+            $customer->forceDelete();
+        });
+
+        ActivityLog::record(
+            'customer.test_data_deleted',
+            'Super admin permanently removed test data: '.json_encode($summary),
+            ['user_id' => $request->user()->id]
+        );
+
+        return response()->json([
+            'message' => 'Test customer, purchases, payments, sessions, usage logs, and MikroTik account were deleted.',
+            'deleted' => $summary,
         ]);
     }
 }

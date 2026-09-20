@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Customer;
 use App\Models\HotspotUser;
 use App\Models\InternetPackage;
+use App\Models\Payment;
 use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\RouterPackageProfile;
@@ -20,6 +21,100 @@ use Tests\TestCase;
 class AdminRouterAccessTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_only_super_admin_can_confirm_router_changing_terminal_commands(): void
+    {
+        $router = Router::factory()->create(['connection_mode' => 'live']);
+        $admin = User::factory()->admin()->create(['permissions' => ['routers.manage']]);
+        $admin->routers()->attach($router);
+        $adminToken = $admin->createToken('terminal-admin', ['admin'])->plainTextToken;
+        $super = User::factory()->superAdmin()->create();
+        $superToken = $super->createToken('terminal-super', ['admin'])->plainTextToken;
+        config(['mikrotik_security.key_hash' => Hash::make('dummy-secure-key')]);
+
+        $this->withToken($adminToken)->postJson('/api/v1/admin/mikrotik-security/unlock', [
+            'security_key' => 'dummy-secure-key',
+        ])->assertOk();
+        $this->withToken($adminToken)->postJson("/api/v1/admin/router-management/{$router->id}/terminal", [
+            'command' => '/system identity set name=test-router',
+            'confirmation' => 'EXECUTE',
+        ])->assertForbidden();
+
+        $this->app['auth']->forgetGuards();
+        $this->withToken($superToken)->postJson('/api/v1/admin/mikrotik-security/unlock', [
+            'security_key' => 'dummy-secure-key',
+        ])->assertOk();
+        $this->withToken($superToken)->postJson("/api/v1/admin/router-management/{$router->id}/terminal", [
+            'command' => '/system identity set name=test-router',
+        ])->assertUnprocessable();
+    }
+
+    public function test_super_admin_permanently_deletes_only_inactive_selected_test_customer_data(): void
+    {
+        $admin = User::factory()->superAdmin()->create();
+        $token = $admin->createToken('cleanup-super', ['admin'])->plainTextToken;
+        $router = Router::factory()->create([
+            'connection_mode' => 'live',
+            'name' => 'Simulated Test Router',
+            'location' => 'Test Location',
+        ]);
+        $package = InternetPackage::factory()->create();
+        $customer = Customer::factory()->create(['status' => 'inactive']);
+        $purchase = Purchase::create([
+            'customer_id' => $customer->id,
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'subtotal' => 5,
+            'payment_fee' => 0,
+            'amount' => 5,
+            'reference' => 'RW-DELETE-TEST',
+            'payment_method' => 'paystack',
+            'fulfillment_type' => 'live',
+            'status' => 'expired',
+        ]);
+        $customer->update(['current_purchase_id' => $purchase->id]);
+        $hotspotUser = HotspotUser::create([
+            'customer_id' => $customer->id,
+            'router_id' => $router->id,
+            'username' => $customer->username,
+            'password' => 'test-password',
+            'mikrotik_user_id' => '*TEST',
+            'profile' => 'test-profile',
+            'disabled' => true,
+        ]);
+        Payment::create([
+            'customer_id' => $customer->id,
+            'purchase_id' => $purchase->id,
+            'reference' => 'HBS-DELETE-TEST',
+            'amount' => 5,
+            'currency' => 'GHS',
+            'status' => 'successful',
+            'provider' => 'paystack',
+        ]);
+
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('disableAndDisconnectHotspotUser')
+            ->once()->with($hotspotUser->username, '*TEST')->andReturn(['success' => true]);
+        $mikrotik->shouldReceive('removeHotspotUser')
+            ->once()->with('*TEST')->andReturn(['success' => true]);
+        $factory = Mockery::mock(MikrotikServiceFactory::class);
+        $factory->shouldReceive('make')->once()->with(Mockery::on(fn ($value) => $value->is($router)))->andReturn($mikrotik);
+        $this->app->instance(MikrotikServiceFactory::class, $factory);
+
+        $this->withToken($token)->getJson('/api/v1/admin/reports/customers')
+            ->assertOk()
+            ->assertJsonPath('customers.data.0.current_purchase.router.name', 'Simulated Test Router')
+            ->assertJsonPath('customers.data.0.current_purchase.router.location', 'Test Location');
+
+        $this->withToken($token)->deleteJson("/api/v1/admin/customers/{$customer->id}/test-data", [
+            'confirmation' => 'DELETE TEST DATA',
+        ])->assertOk()->assertJsonPath('deleted.purchases', 1);
+
+        $this->assertNull(Customer::withTrashed()->find($customer->id));
+        $this->assertDatabaseMissing('purchases', ['id' => $purchase->id]);
+        $this->assertDatabaseMissing('payments', ['reference' => 'HBS-DELETE-TEST']);
+        $this->assertDatabaseHas('activity_logs', ['action' => 'customer.test_data_deleted', 'user_id' => $admin->id]);
+    }
 
     public function test_admin_can_select_only_assigned_routers_and_combined_scope_is_filtered(): void
     {

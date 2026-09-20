@@ -3,18 +3,19 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Router;
 use App\Models\ActivityLog;
+use App\Models\Router;
 use App\Services\MikrotikService;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class MikrotikManagementController extends Controller
 {
     private function service(Router $router): MikrotikService
     {
         abort_if($router->isManual(), 422, 'This router is in Manual mode.');
+
         return new MikrotikService($router);
     }
 
@@ -34,7 +35,9 @@ class MikrotikManagementController extends Controller
         $hosts = $service->getHotspotHosts();
         $interfaces = $service->getInterfaces();
         $traffic = $service->getInterfaceTraffic();
-        if (! $resource['success']) return $this->result($resource);
+        if (! $resource['success']) {
+            return $this->result($resource);
+        }
 
         return response()->json([
             'router' => $router->only(['id', 'name', 'location', 'status', 'wireguard_ip']),
@@ -57,13 +60,23 @@ class MikrotikManagementController extends Controller
         if ($result['success']) {
             $result['data'] = array_map(function ($user) {
                 unset($user['password']);
+
                 return $user;
             }, $result['data']);
         }
+
         return $this->result($result);
     }
-    public function hosts(Router $router) { return $this->result($this->service($router)->getHotspotHosts()); }
-    public function bindings(Router $router) { return $this->result($this->service($router)->getHotspotIpBindings()); }
+
+    public function hosts(Router $router)
+    {
+        return $this->result($this->service($router)->getHotspotHosts());
+    }
+
+    public function bindings(Router $router)
+    {
+        return $this->result($this->service($router)->getHotspotIpBindings());
+    }
 
     public function storeUser(Request $request, Router $router)
     {
@@ -72,6 +85,7 @@ class MikrotikManagementController extends Controller
             'password' => ['required', 'string', 'max:128'],
             'profile' => ['nullable', 'string', 'max:128'],
         ]);
+
         return $this->result($this->service($router)->createHotspotUser($data['name'], $data['password'], $data['profile'] ?? null));
     }
 
@@ -83,7 +97,10 @@ class MikrotikManagementController extends Controller
             'profile' => ['sometimes', 'string', 'max:128'],
             'disabled' => ['sometimes', 'boolean'],
         ]);
-        if (array_key_exists('disabled', $data)) $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        if (array_key_exists('disabled', $data)) {
+            $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        }
+
         return $this->result($this->service($router)->updateHotspotUser($userId, $data));
     }
 
@@ -102,7 +119,10 @@ class MikrotikManagementController extends Controller
             'disabled' => ['sometimes', 'boolean'],
         ]);
         abort_if(empty($data['address']) && empty($data['mac-address']), 422, 'Provide an IP address or MAC address.');
-        if (array_key_exists('disabled', $data)) $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        if (array_key_exists('disabled', $data)) {
+            $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        }
+
         return $data;
     }
 
@@ -142,7 +162,10 @@ class MikrotikManagementController extends Controller
         return $this->result($this->service($router)->removeHotspotIpBinding($bindingId));
     }
 
-    public function profiles(Router $router) { return $this->result($this->service($router)->getHotspotProfiles()); }
+    public function profiles(Router $router)
+    {
+        return $this->result($this->service($router)->getHotspotProfiles());
+    }
 
     public function storeProfile(Request $request, Router $router)
     {
@@ -152,6 +175,7 @@ class MikrotikManagementController extends Controller
             'address-pool' => ['nullable', 'string', 'max:128'],
             'shared-users' => ['nullable', 'integer', 'min:1', 'max:1000'],
         ]);
+
         return $this->result($this->service($router)->ensureHotspotUserProfile(
             $data['name'], $data['rate-limit'] ?? null, $data['address-pool'] ?? null, $data['shared-users'] ?? 1
         ));
@@ -165,6 +189,7 @@ class MikrotikManagementController extends Controller
             'address-pool' => ['sometimes', 'nullable', 'string', 'max:128'],
             'shared-users' => ['sometimes', 'integer', 'min:1', 'max:1000'],
         ]);
+
         return $this->result($this->service($router)->updateHotspotProfile($profileId, $data));
     }
 
@@ -173,8 +198,15 @@ class MikrotikManagementController extends Controller
         return $this->result($this->service($router)->removeHotspotProfile($profileId));
     }
 
-    public function dhcpServers(Router $router) { return $this->result($this->service($router)->getDhcpServers()); }
-    public function dhcpLeases(Router $router) { return $this->result($this->service($router)->getDhcpLeases()); }
+    public function dhcpServers(Router $router)
+    {
+        return $this->result($this->service($router)->getDhcpServers());
+    }
+
+    public function dhcpLeases(Router $router)
+    {
+        return $this->result($this->service($router)->getDhcpLeases());
+    }
 
     public function makeLeaseStatic(Router $router, string $leaseId)
     {
@@ -195,10 +227,14 @@ class MikrotikManagementController extends Controller
             'comment' => ['nullable', 'string', 'max:255'],
             'disabled' => ['sometimes', 'boolean'],
         ]);
+
         return $this->result($this->service($router)->updateDhcpLease($leaseId, $this->normalizeRouterBooleans($data)));
     }
 
-    public function queues(Router $router) { return $this->result($this->service($router)->getSimpleQueues()); }
+    public function queues(Router $router)
+    {
+        return $this->result($this->service($router)->getSimpleQueues());
+    }
 
     private function queueData(Request $request): array
     {
@@ -209,7 +245,10 @@ class MikrotikManagementController extends Controller
             'comment' => ['nullable', 'string', 'max:255'],
             'disabled' => ['sometimes', 'boolean'],
         ]);
-        if (array_key_exists('disabled', $data)) $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        if (array_key_exists('disabled', $data)) {
+            $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        }
+
         return $data;
     }
 
@@ -228,7 +267,10 @@ class MikrotikManagementController extends Controller
         return $this->result($this->service($router)->removeSimpleQueue($queueId));
     }
 
-    public function routerLogs(Router $router) { return $this->result($this->service($router)->getRouterLogs()); }
+    public function routerLogs(Router $router)
+    {
+        return $this->result($this->service($router)->getRouterLogs());
+    }
 
     public function addressLists(Router $router)
     {
@@ -237,6 +279,7 @@ class MikrotikManagementController extends Controller
             $allowed = config('mikrotik_security.allowed_address_lists');
             $result['data'] = array_values(array_filter($result['data'], fn ($row) => in_array($row['list'] ?? '', $allowed, true)));
         }
+
         return $this->result($result);
     }
 
@@ -248,22 +291,28 @@ class MikrotikManagementController extends Controller
             'timeout' => ['nullable', 'string', 'max:32', 'regex:/^[0-9wdhms:]+$/'],
             'comment' => ['nullable', 'string', 'max:255'],
         ]);
+
         return $this->result($this->service($router)->createAddressListEntry($data));
     }
 
     public function destroyAddressList(Router $router, string $entryId)
     {
         $existing = $this->service($router)->getAddressLists();
-        if (! $existing['success']) return $this->result($existing);
+        if (! $existing['success']) {
+            return $this->result($existing);
+        }
         $entry = collect($existing['data'])->firstWhere('.id', $entryId);
         abort_unless($entry && in_array($entry['list'] ?? '', config('mikrotik_security.allowed_address_lists'), true), 404);
+
         return $this->result($this->service($router)->removeAddressListEntry($entryId));
     }
 
     public function updateAddressList(Request $request, Router $router, string $entryId)
     {
         $existing = $this->service($router)->getAddressLists();
-        if (! $existing['success']) return $this->result($existing);
+        if (! $existing['success']) {
+            return $this->result($existing);
+        }
         $entry = collect($existing['data'])->firstWhere('.id', $entryId);
         abort_unless($entry && in_array($entry['list'] ?? '', config('mikrotik_security.allowed_address_lists'), true), 404);
         $data = $request->validate([
@@ -272,17 +321,24 @@ class MikrotikManagementController extends Controller
             'timeout' => ['nullable', 'string', 'max:32', 'regex:/^[0-9wdhms:]+$/'],
             'comment' => ['nullable', 'string', 'max:255'],
         ]);
+
         return $this->result($this->service($router)->updateAddressListEntry($entryId, $data));
     }
 
-    public function backups(Router $router) { return $this->result($this->service($router)->getBackupFiles()); }
+    public function backups(Router $router)
+    {
+        return $this->result($this->service($router)->getBackupFiles());
+    }
 
     public function storeBackup(Router $router)
     {
         $name = 'royal-hotspot-'.$router->id.'-'.now()->format('Ymd-His');
         $password = Str::password(24, symbols: false);
         $result = $this->service($router)->createBackup($name, $password);
-        if (! $result['success']) return $this->result($result);
+        if (! $result['success']) {
+            return $this->result($result);
+        }
+
         return response()->json([
             'data' => $result['data'],
             'name' => $name.'.backup',
@@ -294,8 +350,11 @@ class MikrotikManagementController extends Controller
     public function destroyBackup(Router $router, string $fileId)
     {
         $files = $this->service($router)->getBackupFiles();
-        if (! $files['success']) return $this->result($files);
+        if (! $files['success']) {
+            return $this->result($files);
+        }
         abort_unless(collect($files['data'])->contains(fn ($file) => ($file['.id'] ?? null) === $fileId && ($file['type'] ?? null) === 'backup'), 404);
+
         return $this->result($this->service($router)->removeBackupFile($fileId));
     }
 
@@ -315,6 +374,7 @@ class MikrotikManagementController extends Controller
             'wireless-clients' => 'getWirelessClients',
         ];
         abort_unless(isset($methods[$module]), 404);
+
         return $this->result($service->{$methods[$module]}());
     }
 
@@ -353,6 +413,7 @@ class MikrotikManagementController extends Controller
     {
         $data = $this->normalizeRouterBooleans($this->expandedData($request, $module));
         $methods = ['hotspot-servers' => 'createHotspotServer', 'walled-garden' => 'createWalledGardenEntry', 'ip-pools' => 'createIpPool', 'dhcp-networks' => 'createDhcpNetwork'];
+
         return $this->result($this->service($router)->{$methods[$module]}($data));
     }
 
@@ -360,6 +421,7 @@ class MikrotikManagementController extends Controller
     {
         $data = $this->normalizeRouterBooleans($this->expandedData($request, $module));
         $methods = ['hotspot-servers' => 'updateHotspotServer', 'walled-garden' => 'updateWalledGardenEntry', 'ip-pools' => 'updateIpPool', 'dhcp-networks' => 'updateDhcpNetwork'];
+
         return $this->result($this->service($router)->{$methods[$module]}($itemId, $data));
     }
 
@@ -367,18 +429,23 @@ class MikrotikManagementController extends Controller
     {
         $methods = ['hotspot-servers' => 'removeHotspotServer', 'walled-garden' => 'removeWalledGardenEntry', 'ip-pools' => 'removeIpPool', 'dhcp-networks' => 'removeDhcpNetwork', 'hotspot-cookies' => 'removeHotspotCookie'];
         abort_unless(isset($methods[$module]), 404);
+
         return $this->result($this->service($router)->{$methods[$module]}($itemId));
     }
 
     private function normalizeRouterBooleans(array $data): array
     {
-        if (array_key_exists('disabled', $data)) $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        if (array_key_exists('disabled', $data)) {
+            $data['disabled'] = $data['disabled'] ? 'yes' : 'no';
+        }
+
         return $data;
     }
 
     public function systemInformation(Router $router)
     {
         $service = $this->service($router);
+
         return response()->json([
             'identity' => $service->getSystemIdentity()['data'][0] ?? [],
             'clock' => $service->getSystemClock()['data'][0] ?? [],
@@ -391,52 +458,84 @@ class MikrotikManagementController extends Controller
     public function diagnostic(Request $request, Router $router)
     {
         $data = $request->validate(['tool' => ['required', Rule::in(['ping', 'traceroute'])], 'address' => ['required', 'string', 'max:253', 'regex:/^[A-Za-z0-9:.-]+$/']]);
+
         return $this->result($this->service($router)->{$data['tool']}($data['address']));
     }
 
     public function terminal(Request $request, Router $router)
     {
-        $data = $request->validate(['command' => ['required', 'string', 'max:500']]);
+        $data = $request->validate([
+            'command' => ['required', 'string', 'max:1000'],
+            'confirmation' => ['nullable', 'string'],
+        ]);
         $command = preg_replace('/\s+/', ' ', trim($data['command']));
 
         abort_if((bool) preg_match('/[\x00-\x1F\x7F;|&`$<>]/', $command), 422, 'Command chaining and control characters are not allowed.');
-        $printMenus = '(?:interface(?:\/bridge(?:\/port|\/host)?)?|ip\/(?:address|route|arp|dns(?:\/cache)?|dhcp-server(?:\/lease|\/network)?|hotspot(?:\/active|\/host|\/profile|\/ip-binding|\/walled-garden)?)|queue\/simple|system\/(?:resource|identity|clock|health)|log)';
-        $parameter = '[A-Za-z0-9_.-]+=[A-Za-z0-9_.,:\/@*+%-]+';
-        $printCommand = (bool) preg_match('#^/'.$printMenus.' print(?: '.$parameter.')*$#i', $command);
-        $diagnosticCommand = (bool) preg_match('#^/(?:ping|tool/traceroute) address=[A-Za-z0-9:.-]+(?: count=[1-9][0-9]?)?$#i', $command);
-        abort_unless($printCommand || $diagnosticCommand, 422, 'Only approved read-only print, ping, and traceroute commands are allowed.');
+        abort_unless(str_starts_with($command, '/'), 422, 'RouterOS commands must start with /.');
+        $readOnly = (bool) preg_match('#\s(?:print|monitor|get)(?:\s|$)#i', $command)
+            || (bool) preg_match('#^/(?:ping|tool(?:/|\s+)traceroute)(?:\s|$)#i', $command);
+        if (! $readOnly) {
+            abort_unless($request->user()->isSuperAdmin(), 403, 'Only a super administrator can change router configuration from the terminal.');
+            abort_unless(($data['confirmation'] ?? null) === 'EXECUTE', 422, 'Confirm this router-changing command before execution.');
+        }
 
-        $result = $this->service($router)->executeReadOnlyTerminal($command);
+        $result = $this->service($router)->executeTerminal($command);
         if ($result['success']) {
             $sensitive = ['password', 'private-key', 'shared-secret', 'secret'];
             $result['data'] = array_map(function ($row) use ($sensitive) {
-                if (! is_array($row)) return $row;
-                foreach ($sensitive as $key) unset($row[$key]);
+                if (! is_array($row)) {
+                    return $row;
+                }
+                foreach ($sensitive as $key) {
+                    unset($row[$key]);
+                }
+
                 return $row;
             }, $result['data'] ?? []);
         }
         ActivityLog::record('mikrotik.terminal.executed', json_encode([
-            'router_id' => $router->id, 'command' => $command,
+            'router_id' => $router->id, 'command' => $this->redactTerminalCommand($command), 'read_only' => $readOnly,
             'outcome' => $result['success'] ? 'success' : 'failed',
         ], JSON_UNESCAPED_SLASHES), ['user_id' => $request->user()->id]);
+
         return $this->result($result);
     }
 
-    public function bridges(Router $router) { return $this->result($this->service($router)->getBridges()); }
+    private function redactTerminalCommand(string $command): string
+    {
+        return preg_replace(
+            '/\b(password|private-key|shared-secret|secret)=(("[^"]*")|\S+)/i',
+            '$1=[REDACTED]',
+            $command
+        );
+    }
+
+    public function bridges(Router $router)
+    {
+        return $this->result($this->service($router)->getBridges());
+    }
+
     public function bridgePorts(Router $router)
     {
         $service = $this->service($router);
         $ports = $service->getBridgePorts();
-        if (! $ports['success']) return $this->result($ports);
+        if (! $ports['success']) {
+            return $this->result($ports);
+        }
         $bridges = $service->getBridges();
         $interfaces = $service->getInterfaces();
+
         return response()->json([
             'data' => $ports['data'],
             'bridges' => $bridges['success'] ? $bridges['data'] : [],
             'interfaces' => $interfaces['success'] ? $interfaces['data'] : [],
         ]);
     }
-    public function bridgeHosts(Router $router) { return $this->result($this->service($router)->getBridgeHosts()); }
+
+    public function bridgeHosts(Router $router)
+    {
+        return $this->result($this->service($router)->getBridgeHosts());
+    }
 
     private function bridgeData(Request $request): array
     {
@@ -447,7 +546,12 @@ class MikrotikManagementController extends Controller
             'comment' => ['nullable', 'string', 'max:255'],
             'disabled' => ['sometimes', 'boolean'],
         ]);
-        foreach (['vlan-filtering', 'disabled'] as $key) if (array_key_exists($key, $data)) $data[$key] = $data[$key] ? 'yes' : 'no';
+        foreach (['vlan-filtering', 'disabled'] as $key) {
+            if (array_key_exists($key, $data)) {
+                $data[$key] = $data[$key] ? 'yes' : 'no';
+            }
+        }
+
         return $data;
     }
 
@@ -465,12 +569,17 @@ class MikrotikManagementController extends Controller
     {
         $service = $this->service($router);
         $bridges = $service->getBridges();
-        if (! $bridges['success']) return $this->result($bridges);
+        if (! $bridges['success']) {
+            return $this->result($bridges);
+        }
         $bridge = collect($bridges['data'])->firstWhere('.id', $bridgeId);
         abort_unless($bridge && ! $this->routerTrue($bridge['dynamic'] ?? false), 422, 'Dynamic or unknown bridges cannot be deleted.');
         $ports = $service->getBridgePorts();
-        if (! $ports['success']) return $this->result($ports);
+        if (! $ports['success']) {
+            return $this->result($ports);
+        }
         abort_if(collect($ports['data'])->contains(fn ($port) => ($port['bridge'] ?? null) === ($bridge['name'] ?? null)), 422, 'Remove or move every bridge port before deleting this bridge.');
+
         return $this->result($service->removeBridge($bridgeId));
     }
 
@@ -497,11 +606,18 @@ class MikrotikManagementController extends Controller
             'hw' => ['sometimes', 'boolean'],
             'disabled' => ['sometimes', 'boolean'],
         ];
-        if ($moving) $rules['confirmation'] = ['required', 'string'];
+        if ($moving) {
+            $rules['confirmation'] = ['required', 'string'];
+        }
         $data = $request->validate($rules);
         $this->rejectProtectedInterface($data['interface']);
         unset($data['confirmation']);
-        foreach (['hw', 'disabled'] as $key) if (array_key_exists($key, $data)) $data[$key] = $data[$key] ? 'yes' : 'no';
+        foreach (['hw', 'disabled'] as $key) {
+            if (array_key_exists($key, $data)) {
+                $data[$key] = $data[$key] ? 'yes' : 'no';
+            }
+        }
+
         return $data;
     }
 
@@ -510,6 +626,7 @@ class MikrotikManagementController extends Controller
         $data = $this->bridgePortData($request);
         $result = $this->service($router)->createBridgePort($data);
         $this->auditBridgePort($request, $router, $data['interface'], null, $data['bridge'], $result['success']);
+
         return $this->result($result);
     }
 
@@ -518,7 +635,9 @@ class MikrotikManagementController extends Controller
         $request->validate(['confirmation' => ['required', 'string', 'max:128']]);
         $service = $this->service($router);
         $ports = $service->getBridgePorts();
-        if (! $ports['success']) return $this->result($ports);
+        if (! $ports['success']) {
+            return $this->result($ports);
+        }
         $current = $this->findBridgePort($ports['data'], $portId, (string) $request->input('confirmation'));
         abort_unless($current, 404, 'The bridge port no longer exists. Refresh the page and try again.');
         abort_if($this->routerTrue($current['dynamic'] ?? false), 422, 'Dynamic bridge ports cannot be changed.');
@@ -527,6 +646,7 @@ class MikrotikManagementController extends Controller
         $data = $this->bridgePortData($request);
         $result = $service->updateBridgePort((string) $current['.id'], $data);
         $this->auditBridgePort($request, $router, $data['interface'], $current['bridge'] ?? null, $data['bridge'], $result['success']);
+
         return $this->result($result);
     }
 
@@ -535,7 +655,9 @@ class MikrotikManagementController extends Controller
         $request->validate(['confirmation' => ['required', 'string', 'max:128']]);
         $service = $this->service($router);
         $ports = $service->getBridgePorts();
-        if (! $ports['success']) return $this->result($ports);
+        if (! $ports['success']) {
+            return $this->result($ports);
+        }
         $current = $this->findBridgePort($ports['data'], $portId, (string) $request->input('confirmation'));
         abort_unless($current, 404, 'The bridge port no longer exists. Refresh the page and try again.');
         abort_if($this->routerTrue($current['dynamic'] ?? false), 422, 'Dynamic bridge ports cannot be removed.');
@@ -544,6 +666,7 @@ class MikrotikManagementController extends Controller
         abort_unless(hash_equals($interface, (string) $request->input('confirmation')), 422, 'Type the interface name to confirm removal.');
         $result = $service->removeBridgePort((string) $current['.id']);
         $this->auditBridgePort($request, $router, $interface, $current['bridge'] ?? null, null, $result['success']);
+
         return $this->result($result);
     }
 
@@ -560,7 +683,9 @@ class MikrotikManagementController extends Controller
             fn (array $port) => hash_equals((string) ($port['.id'] ?? ''), $decodedId)
         );
 
-        if ($current || $confirmedInterface === '') return $current;
+        if ($current || $confirmedInterface === '') {
+            return $current;
+        }
 
         return collect($ports)->first(
             fn (array $port) => hash_equals((string) ($port['interface'] ?? ''), $confirmedInterface)
