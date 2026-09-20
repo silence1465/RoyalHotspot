@@ -37,6 +37,8 @@ export default function BuyInternet() {
   const [confirming, setConfirming] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState('momo');
   const [paymentMethods, setPaymentMethods] = useState({ paystack: true, momo: true });
+  const [assignedRouter, setAssignedRouter] = useState(null);
+  const [packageMessage, setPackageMessage] = useState('');
 
   const selectedRouter = selected?.available_routers?.find((router) => String(router.id) === routerId);
   const availablePaymentMethods = selectedRouter?.payment_methods || paymentMethods;
@@ -49,6 +51,8 @@ export default function BuyInternet() {
       .then(({ data }) => {
         const methods = data.payment_methods || { paystack: true, momo: true };
         setPackages(data.packages || data);
+        setAssignedRouter(data.assigned_router || null);
+        setPackageMessage(data.message || '');
         setPaymentMethods(methods);
         setPaymentMethod(methods.momo ? 'momo' : 'paystack');
       })
@@ -116,7 +120,13 @@ export default function BuyInternet() {
   return (
     <div>
       <h1 className="text-xl font-semibold text-slate-900 mb-1">Buy Internet</h1>
-      <p className="text-slate-500 text-sm mb-5">Pick a package to get connected.</p>
+      <p className="text-slate-500 text-sm mb-5">
+        {assignedRouter ? `Packages available at ${assignedRouter.name}${assignedRouter.location ? ` — ${assignedRouter.location}` : ''}.` : 'Pick a package to get connected.'}
+      </p>
+
+      {packageMessage && (
+        <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{packageMessage}</div>
+      )}
 
       {selected && (
         <div className="mb-5 bg-indigo-50 border border-indigo-200 rounded-md p-4">

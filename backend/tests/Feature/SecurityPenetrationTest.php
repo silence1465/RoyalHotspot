@@ -61,6 +61,7 @@ class SecurityPenetrationTest extends TestCase
     {
         $customer = Customer::factory()->active()->create();
         $router = Router::factory()->create(['connection_mode' => 'live']);
+        $customer->update(['home_router_id' => $router->id]);
         $package = InternetPackage::factory()->create(['price' => 50, 'status' => 'active']);
         RouterPackageProfile::create([
             'router_id' => $router->id,
@@ -136,6 +137,7 @@ class SecurityPenetrationTest extends TestCase
     {
         $customer = Customer::factory()->active()->create(['email' => null]);
         $router = Router::factory()->create(['connection_mode' => 'live']);
+        $customer->update(['home_router_id' => $router->id]);
         $package = InternetPackage::factory()->create(['price' => 100, 'status' => 'active']);
         RouterPackageProfile::create([
             'router_id' => $router->id,
@@ -189,6 +191,7 @@ class SecurityPenetrationTest extends TestCase
             'connection_mode' => 'live',
             'paystack_enabled' => true,
         ]);
+        $customer->update(['home_router_id' => $router->id]);
         $package = InternetPackage::factory()->create(['price' => 100, 'status' => 'active']);
         RouterPackageProfile::create([
             'router_id' => $router->id,

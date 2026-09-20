@@ -6,7 +6,6 @@ use App\Models\InternetPackage;
 use App\Models\RouterPackageProfile;
 use Illuminate\Contracts\Validation\Validator as ValidatorContract;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Support\Facades\Validator;
 
 class InitializePaymentRequest extends FormRequest
 {
@@ -51,10 +50,18 @@ class InitializePaymentRequest extends FormRequest
 
             if ($package && $package->status !== 'active') {
                 $validator->errors()->add('package_id', 'This package is no longer available.');
+
                 return;
             }
 
             if ($package && $this->filled('router_id')) {
+                $customer = $this->user();
+                if (! $customer?->home_router_id || (int) $customer->home_router_id !== $this->integer('router_id')) {
+                    $validator->errors()->add('router_id', 'You can only purchase packages assigned to your router.');
+
+                    return;
+                }
+
                 $hasMapping = RouterPackageProfile::where('package_id', $package->id)
                     ->where('router_id', $this->input('router_id'))
                     ->exists();

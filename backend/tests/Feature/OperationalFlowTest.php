@@ -16,9 +16,9 @@ use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\RouterPackageProfile;
 use App\Models\SystemSetting;
+use App\Services\PurchaseService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
-use App\Services\PurchaseService;
 use Tests\TestCase;
 
 class OperationalFlowTest extends TestCase
@@ -90,11 +90,20 @@ class OperationalFlowTest extends TestCase
 
     public function test_checkout_reports_enabled_gateways_and_rejects_a_disabled_one(): void
     {
-        InternetPackage::factory()->create(['status' => 'active']);
+        $package = InternetPackage::factory()->create(['status' => 'active']);
+        $router = Router::factory()->create();
+        RouterPackageProfile::create([
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'profile_name' => 'gateway-test',
+        ]);
+        $customer = Customer::factory()->create(['home_router_id' => $router->id]);
         SystemSetting::set('paystack_enabled', true);
         SystemSetting::set('momo_enabled', false);
 
-        $payload = app(PackageController::class)->index()->getData(true);
+        $packageRequest = Request::create('/api/v1/customer/packages');
+        $packageRequest->setUserResolver(fn () => $customer);
+        $payload = app(PackageController::class)->index($packageRequest)->getData(true);
 
         $this->assertTrue($payload['payment_methods']['paystack']);
         $this->assertFalse($payload['payment_methods']['momo']);
@@ -138,7 +147,8 @@ class OperationalFlowTest extends TestCase
             'expires_at' => $expiresAt,
         ]);
 
-        $controller = new class extends ActiveUsersController {
+        $controller = new class extends ActiveUsersController
+        {
             protected function activeUsersFor(Router $router): array
             {
                 return [

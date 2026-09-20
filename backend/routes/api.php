@@ -46,8 +46,6 @@ Route::prefix('v1')->group(function () {
         ->middleware('throttle:login');
     Route::post('/password/reset', [PasswordRecoveryController::class, 'reset'])
         ->middleware('throttle:login');
-    Route::get('/customer/packages', [PackageController::class, 'index']);
-
     // ── Guest checkout — no account required ────────────────────
     // Every route here already sits under the global 60/min 'api'
     // throttle (see AppServiceProvider). Extra throttling only added
@@ -249,6 +247,7 @@ Route::prefix('v1')->group(function () {
             ->middleware('throttle:login');
 
         Route::get('/dashboard', [App\Http\Controllers\Customer\DashboardController::class, 'index']);
+        Route::get('/packages', [PackageController::class, 'index']);
         Route::put('/profile', [ProfileController::class, 'update']);
         Route::post('/profile/wifi-password', [ProfileController::class, 'resetWifiPassword'])
             ->middleware('throttle:wifi-password-reset');

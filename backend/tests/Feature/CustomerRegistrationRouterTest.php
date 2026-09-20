@@ -3,7 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\Customer;
+use App\Models\InternetPackage;
 use App\Models\Router;
+use App\Models\RouterPackageProfile;
+use App\Models\SystemSetting;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -138,5 +141,65 @@ class CustomerRegistrationRouterTest extends TestCase
             ->assertOk()
             ->assertJsonPath('customers.data.0.id', $customer->id)
             ->assertJsonPath('customers.data.0.home_router.id', $router->id);
+    }
+
+    public function test_customer_sees_and_can_buy_only_packages_mapped_to_home_router(): void
+    {
+        $homeRouter = Router::factory()->create(['name' => 'Home Router', 'momo_enabled' => true]);
+        $otherRouter = Router::factory()->create(['name' => 'Other Router', 'momo_enabled' => true]);
+        $homePackage = InternetPackage::factory()->create(['name' => 'Home Package', 'status' => 'active']);
+        $otherPackage = InternetPackage::factory()->create(['name' => 'Other Package', 'status' => 'active']);
+        RouterPackageProfile::create(['router_id' => $homeRouter->id, 'package_id' => $homePackage->id, 'profile_name' => 'home-profile']);
+        RouterPackageProfile::create(['router_id' => $otherRouter->id, 'package_id' => $otherPackage->id, 'profile_name' => 'other-profile']);
+        $customer = Customer::factory()->create(['home_router_id' => $homeRouter->id]);
+        $token = $customer->createToken('customer-packages', ['customer'])->plainTextToken;
+        SystemSetting::set('momo_enabled', true);
+
+        $this->withToken($token)->getJson('/api/v1/customer/packages')
+            ->assertOk()
+            ->assertJsonPath('assigned_router.id', $homeRouter->id)
+            ->assertJsonCount(1, 'packages')
+            ->assertJsonPath('packages.0.id', $homePackage->id)
+            ->assertJsonPath('packages.0.available_routers.0.id', $homeRouter->id);
+
+        $successfulPurchase = $this->withToken($token)->postJson('/api/v1/customer/purchases', [
+            'package_id' => $homePackage->id,
+            'router_id' => $homeRouter->id,
+            'payment_method' => 'momo',
+        ])->assertCreated()
+            ->assertJsonPath('router.id', $homeRouter->id)
+            ->assertJsonPath('package.name', 'Home Package');
+
+        $this->assertDatabaseHas('purchases', [
+            'reference' => $successfulPurchase->json('reference'),
+            'customer_id' => $customer->id,
+            'package_id' => $homePackage->id,
+            'router_id' => $homeRouter->id,
+            'status' => 'pending',
+        ]);
+
+        $this->withToken($token)->postJson('/api/v1/customer/purchases', [
+            'package_id' => $otherPackage->id,
+            'router_id' => $otherRouter->id,
+            'payment_method' => 'momo',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('router_id');
+
+        $this->assertDatabaseMissing('purchases', [
+            'customer_id' => $customer->id,
+            'router_id' => $otherRouter->id,
+        ]);
+    }
+
+    public function test_unassigned_customer_receives_no_packages(): void
+    {
+        $customer = Customer::factory()->create(['home_router_id' => null]);
+        $token = $customer->createToken('unassigned-customer', ['customer'])->plainTextToken;
+
+        $this->withToken($token)->getJson('/api/v1/customer/packages')
+            ->assertOk()
+            ->assertJsonPath('assigned_router', null)
+            ->assertJsonPath('packages', [])
+            ->assertJsonPath('message', 'No router is assigned to your account. Please contact the administrator.');
     }
 }

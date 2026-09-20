@@ -33,8 +33,24 @@ class PackageController extends Controller
     {
         $request ??= request();
         $capacity ??= app(CapacityService::class);
+        $customer = $request->user();
+        $routerId = $customer?->home_router_id;
+
+        if (! $routerId) {
+            return response()->json([
+                'packages' => [],
+                'assigned_router' => null,
+                'message' => 'No router is assigned to your account. Please contact the administrator.',
+                'payment_methods' => [
+                    'paystack' => $this->gatewayEnabled('paystack'),
+                    'momo' => $this->gatewayEnabled('momo'),
+                ],
+            ]);
+        }
+
         $packages = InternetPackage::active()
-            ->with(['routerProfiles.router' => function ($query) {
+            ->whereHas('routerProfiles', fn ($profiles) => $profiles->where('router_id', $routerId))
+            ->with(['routerProfiles' => fn ($profiles) => $profiles->where('router_id', $routerId), 'routerProfiles.router' => function ($query) {
                 $query->select('id', 'name', 'location', 'status', 'connection_mode', 'momo_enabled', 'paystack_enabled');
             }])
             ->orderBy('price')
@@ -75,6 +91,7 @@ class PackageController extends Controller
 
         return response()->json([
             'packages' => $packages,
+            'assigned_router' => $customer->homeRouter()->first(['routers.id', 'routers.name', 'routers.location']),
             'payment_methods' => [
                 'paystack' => $this->gatewayEnabled('paystack'),
                 'momo' => $this->gatewayEnabled('momo'),
