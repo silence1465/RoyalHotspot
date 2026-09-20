@@ -16,6 +16,7 @@ export default function AdminBandwidth() {
   const [error, setError] = useState('');
   const [capacityForm, setCapacityForm] = useState({ capacity_gb: '', reserve_percent: 15, reason: '' });
   const [savingCapacity, setSavingCapacity] = useState(false);
+  const [activeUsageView, setActiveUsageView] = useState('users');
 
   const [historyPeriod, setHistoryPeriod] = useState('day');
   const [historyMonth, setHistoryMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -144,10 +145,28 @@ export default function AdminBandwidth() {
         )}
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-200">
-          <h2 className="text-sm font-semibold text-slate-700">Per-User Usage</h2>
-        </div>
+      <div>
+      <div className="border-b border-slate-200">
+        <nav className="flex gap-1" aria-label="Bandwidth details">
+          <button
+            type="button"
+            onClick={() => setActiveUsageView('users')}
+            className={`rounded-t-lg border border-b-0 px-5 py-2.5 text-sm font-medium transition-colors ${activeUsageView === 'users' ? 'border-indigo-200 bg-indigo-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+          >
+            Per-User Usage
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveUsageView('history')}
+            className={`rounded-t-lg border border-b-0 px-5 py-2.5 text-sm font-medium transition-colors ${activeUsageView === 'history' ? 'border-indigo-200 bg-indigo-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+          >
+            History
+          </button>
+        </nav>
+      </div>
+
+      {activeUsageView === 'users' && (
+      <div className="bg-white rounded-b-xl rounded-tr-xl border border-t-0 border-slate-200 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-slate-400 text-xs border-b border-slate-100">
@@ -171,8 +190,10 @@ export default function AdminBandwidth() {
         </table>
         <TablePagination {...usersPagination} onPageChange={usersPagination.setPage} />
       </div>
+      )}
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      {activeUsageView === 'history' && (
+      <div className="bg-white rounded-b-xl rounded-tr-xl border border-t-0 border-slate-200 shadow-sm overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h2 className="text-sm font-semibold text-slate-700">History</h2>
           <div className="flex items-center gap-2">
@@ -220,6 +241,8 @@ export default function AdminBandwidth() {
           </tbody>
         </table>
         <TablePagination {...historyPagination} onPageChange={historyPagination.setPage} />
+      </div>
+      )}
       </div>
     </div>
   );

@@ -14,16 +14,30 @@ class FreeTrialController extends Controller
 {
     public function offer(Request $request)
     {
+        $customer = $request->user();
+        if (! $customer->home_router_id) {
+            return response()->json(['campaign' => null]);
+        }
+
         $campaign = FreeTrialCampaign::with(['package', 'router:id,name,location,status,connection_mode'])
+            ->where('router_id', $customer->home_router_id)
             ->where('is_active', true)->where('starts_at', '<=', now())->where('ends_at', '>', now())
             ->orderBy('ends_at')->first();
 
-        if (! $campaign) return response()->json(['campaign' => null]);
+        if (! $campaign) {
+            return response()->json(['campaign' => null]);
+        }
 
         $claimed = Purchase::where('free_trial_campaign_id', $campaign->id)
-            ->where('customer_id', $request->user()->id)->exists();
+            ->where('customer_id', $customer->id)->exists();
+        $hasActiveAccess = $this->hasActiveAccess($customer->id, $campaign->router_id);
 
-        return response()->json(['campaign' => $campaign, 'claimed' => $claimed]);
+        return response()->json([
+            'campaign' => $campaign,
+            'claimed' => $claimed,
+            'can_claim' => ! $claimed && ! $hasActiveAccess,
+            'claim_unavailable_reason' => $hasActiveAccess ? 'Available after your current package ends.' : null,
+        ]);
     }
 
     public function claim(Request $request, PurchaseService $purchaseService)
@@ -34,10 +48,10 @@ class FreeTrialController extends Controller
             $purchase = DB::transaction(function () use ($request) {
                 $campaign = FreeTrialCampaign::whereKey($request->integer('campaign_id'))->lockForUpdate()->firstOrFail();
                 abort_unless($campaign->isOpen(), 422, 'This free-access campaign is not currently available.');
+                abort_unless((int) $campaign->router_id === (int) $request->user()->home_router_id, 422, 'This free campaign is not available at your assigned router.');
                 abort_if($campaign->router->connection_mode !== 'live', 422, 'The campaign router is not configured for automatic access.');
 
-                $hasActive = Purchase::where('customer_id', $request->user()->id)
-                    ->where('router_id', $campaign->router_id)->active()->exists();
+                $hasActive = $this->hasActiveAccess($request->user()->id, $campaign->router_id);
                 abort_if($hasActive, 422, 'You already have active internet at this location.');
 
                 return Purchase::create([
@@ -65,6 +79,17 @@ class FreeTrialController extends Controller
         }
 
         $purchase = $purchaseService->fulfill($purchase);
+
         return response()->json(['message' => 'Free internet activated.', 'purchase' => $purchase], 201);
+    }
+
+    private function hasActiveAccess(int $customerId, int $routerId): bool
+    {
+        return Purchase::where('customer_id', $customerId)
+            ->where('router_id', $routerId)
+            ->where(function ($query) {
+                $query->active()->orWhere('status', 'pending_activation');
+            })
+            ->exists();
     }
 }

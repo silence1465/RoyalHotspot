@@ -35,6 +35,15 @@ test('dummy provisioned credentials trigger browser-side hotspot login once read
     connectionStatus: '',
     currentCheckComplete: true,
   }), true);
+
+  assert.equal(canBeginAutoConnect({
+    requested: true,
+    hasPortalContext: true,
+    hasPurchase: true,
+    hasCredentials: true,
+    connectionStatus: 'provisioning',
+    currentCheckComplete: true,
+  }), true);
 });
 
 test('active or unknown connection cannot start a duplicate hotspot login', () => {

@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Customer;
+use App\Models\FreeTrialCampaign;
 use App\Models\InternetPackage;
+use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\RouterPackageProfile;
 use App\Models\SystemSetting;
@@ -201,5 +203,110 @@ class CustomerRegistrationRouterTest extends TestCase
             ->assertJsonPath('assigned_router', null)
             ->assertJsonPath('packages', [])
             ->assertJsonPath('message', 'No router is assigned to your account. Please contact the administrator.');
+    }
+
+    public function test_customer_sees_only_active_free_campaign_for_home_router(): void
+    {
+        $homeRouter = Router::factory()->create();
+        $otherRouter = Router::factory()->create();
+        $package = InternetPackage::factory()->create(['status' => 'active']);
+        RouterPackageProfile::create(['router_id' => $homeRouter->id, 'package_id' => $package->id, 'profile_name' => 'free-home']);
+        RouterPackageProfile::create(['router_id' => $otherRouter->id, 'package_id' => $package->id, 'profile_name' => 'free-other']);
+        $campaign = FreeTrialCampaign::create([
+            'name' => 'Home Router Free Day',
+            'package_id' => $package->id,
+            'router_id' => $homeRouter->id,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+        ]);
+        $otherCampaign = FreeTrialCampaign::create([
+            'name' => 'Other Router Campaign',
+            'package_id' => $package->id,
+            'router_id' => $otherRouter->id,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+        ]);
+
+        $customer = Customer::factory()->create(['home_router_id' => $homeRouter->id]);
+        $token = $customer->createToken('free-campaign-home', ['customer'])->plainTextToken;
+        $this->withToken($token)->getJson('/api/v1/customer/free-trial')
+            ->assertOk()
+            ->assertJsonPath('campaign.id', $campaign->id)
+            ->assertJsonPath('campaign.name', 'Home Router Free Day')
+            ->assertJsonPath('claimed', false)
+            ->assertJsonPath('can_claim', true);
+
+        $this->withToken($token)->postJson('/api/v1/customer/free-trial/claim', [
+            'campaign_id' => $otherCampaign->id,
+        ])->assertUnprocessable()
+            ->assertJsonPath('message', 'This free campaign is not available at your assigned router.');
+
+    }
+
+    public function test_active_package_hides_free_campaign_claim_action(): void
+    {
+        $router = Router::factory()->create();
+        $package = InternetPackage::factory()->create(['status' => 'active']);
+        RouterPackageProfile::create(['router_id' => $router->id, 'package_id' => $package->id, 'profile_name' => 'active-access']);
+        $campaign = FreeTrialCampaign::create([
+            'name' => 'Later Free Campaign',
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+        ]);
+        $customer = Customer::factory()->create(['home_router_id' => $router->id]);
+        Purchase::create([
+            'customer_id' => $customer->id,
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'subtotal' => 10,
+            'payment_fee' => 0,
+            'amount' => 10,
+            'reference' => 'ACTIVE-BLOCKS-FREE',
+            'payment_method' => 'momo',
+            'fulfillment_type' => 'live',
+            'status' => 'active',
+            'verified_at' => now(),
+            'starts_at' => now(),
+            'expires_at' => now()->addHour(),
+            'usage_policy' => 'none',
+            'policy_access_status' => 'active',
+        ]);
+        $token = $customer->createToken('active-blocks-free', ['customer'])->plainTextToken;
+
+        $this->withToken($token)->getJson('/api/v1/customer/free-trial')
+            ->assertOk()
+            ->assertJsonPath('campaign.id', $campaign->id)
+            ->assertJsonPath('can_claim', false)
+            ->assertJsonPath('claim_unavailable_reason', 'Available after your current package ends.');
+
+        $this->withToken($token)->postJson('/api/v1/customer/free-trial/claim', [
+            'campaign_id' => $campaign->id,
+        ])->assertUnprocessable()
+            ->assertJsonPath('message', 'You already have active internet at this location.');
+    }
+
+    public function test_unassigned_customer_does_not_receive_a_free_campaign(): void
+    {
+        $router = Router::factory()->create();
+        $package = InternetPackage::factory()->create(['status' => 'active']);
+        FreeTrialCampaign::create([
+            'name' => 'Router Campaign',
+            'package_id' => $package->id,
+            'router_id' => $router->id,
+            'starts_at' => now()->subHour(),
+            'ends_at' => now()->addDay(),
+            'is_active' => true,
+        ]);
+        $customer = Customer::factory()->create(['home_router_id' => null]);
+        $token = $customer->createToken('free-campaign-unassigned', ['customer'])->plainTextToken;
+
+        $this->withToken($token)->getJson('/api/v1/customer/free-trial')
+            ->assertOk()
+            ->assertJsonPath('campaign', null);
     }
 }

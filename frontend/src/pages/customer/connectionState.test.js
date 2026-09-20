@@ -12,6 +12,13 @@ test('connecting renders a disabled button', () => {
   assert.equal(control.disabled, true);
 });
 
+test('provisioning renders as connecting but does not represent a submitted login', () => {
+  const control = connectionControl('provisioning', true, true);
+  assert.equal(control.kind, 'connecting');
+  assert.equal(control.disabled, true);
+  assert.equal(canPrepareConnection('provisioning', true), false);
+});
+
 test('disconnected with portal context renders connect', () => {
   assert.equal(connectionControl('', true, true).label, 'Connect to WiFi');
 });

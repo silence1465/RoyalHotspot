@@ -22,7 +22,7 @@ export default function CustomerDashboard() {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [hasFreeInternet, setHasFreeInternet] = useState(false);
+  const [freeInternetOffer, setFreeInternetOffer] = useState(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showWifiPasswordForm, setShowWifiPasswordForm] = useState(false);
   const [wifiPasswordForm, setWifiPasswordForm] = useState({ current_password: '', password: '', password_confirmation: '' });
@@ -118,7 +118,7 @@ export default function CustomerDashboard() {
     // never hold up a paid customer's automatic MikroTik login.
     api.get('/customer/free-trial', { timeout: 5000 })
       .then(({ data: freeTrial }) => {
-        if (!cancelled) setHasFreeInternet(Boolean(freeTrial?.campaign));
+        if (!cancelled) setFreeInternetOffer(freeTrial?.campaign ? freeTrial : null);
       })
       .catch(() => {});
 
@@ -340,7 +340,7 @@ export default function CustomerDashboard() {
       attempts: provisioningAttempts.current,
     })) return undefined;
 
-    setConnection({ status: 'connecting', message: 'Activating your hotspot account...' });
+    setConnection({ status: 'provisioning', message: 'Activating your hotspot account...' });
     const timer = window.setTimeout(async () => {
       provisioningAttempts.current += 1;
       try {
@@ -431,18 +431,18 @@ export default function CustomerDashboard() {
           className={`rounded-md border px-4 py-3 text-sm ${connection.status === 'active' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : connection.status === 'failed' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-indigo-50 border-indigo-200 text-indigo-700'}`}
         >
           <div className="flex items-center gap-3">
-            {(connection.status === 'connecting' || connection.status === 'checking') && (
+            {(connection.status === 'connecting' || connection.status === 'checking' || connection.status === 'provisioning') && (
               <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
             )}
             {connection.status === 'active' && <CheckCircle2 className="h-5 w-5 shrink-0" />}
             <div>
               <p className="font-medium">{connection.message}</p>
-              {(connection.status === 'connecting' || connection.status === 'checking') && (
+              {(connection.status === 'connecting' || connection.status === 'checking' || connection.status === 'provisioning') && (
                 <p className="mt-0.5 text-xs opacity-80">Please keep this page open. This normally takes a few seconds.</p>
               )}
             </div>
           </div>
-          {(connection.status === 'connecting' || connection.status === 'checking') && (
+          {(connection.status === 'connecting' || connection.status === 'checking' || connection.status === 'provisioning') && (
             <div className="mt-3 h-1 overflow-hidden rounded-full bg-indigo-100">
               <div className="h-full w-2/3 animate-pulse rounded-full bg-indigo-600" />
             </div>
@@ -471,30 +471,49 @@ export default function CustomerDashboard() {
         </div>
       </div>
 
+      {freeInternetOffer?.campaign && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <Gift className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Free campaign available</p>
+                <h2 className="mt-1 font-semibold text-slate-900">{freeInternetOffer.campaign.name}</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  {freeInternetOffer.campaign.package?.name} at {freeInternetOffer.campaign.router?.name}
+                </p>
+                <p className="mt-1 text-xs text-emerald-700">Ends {new Date(freeInternetOffer.campaign.ends_at).toLocaleString()}</p>
+              </div>
+            </div>
+            {freeInternetOffer.claimed ? (
+              <span className="inline-flex rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700">Already claimed</span>
+            ) : freeInternetOffer.can_claim ? (
+              <Link to="/free-trial" className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+                <Gift className="h-4 w-4" />
+                View Free Internet
+              </Link>
+            ) : (
+              <span className="inline-flex rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+                {freeInternetOffer.claim_unavailable_reason || 'Currently unavailable'}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {!purchase && (
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center">
           <Wifi className="h-8 w-8 text-slate-300 mx-auto mb-3" />
           <p className="text-slate-600 font-medium">No active subscription</p>
           <p className="text-slate-400 text-sm mt-1 mb-4">Pick a package to get connected.</p>
           <div className="flex flex-wrap items-center justify-center gap-3">
-            {!hasFreeInternet && (
-              <Link
-                to="/buy"
-                className="inline-flex items-center gap-2 bg-indigo-600 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-indigo-700"
-              >
-                <Wifi className="h-4 w-4" />
-                Buy Internet
-              </Link>
-            )}
-            {hasFreeInternet && (
-              <Link
-                to="/free-trial"
-                className="inline-flex items-center gap-2 bg-emerald-600 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-emerald-700"
-              >
-                <Gift className="h-4 w-4" />
-                Free Internet
-              </Link>
-            )}
+            <Link
+              to="/buy"
+              className="inline-flex items-center gap-2 bg-indigo-600 text-white rounded-md px-4 py-2 text-sm font-medium hover:bg-indigo-700"
+            >
+              <Wifi className="h-4 w-4" />
+              Buy Internet
+            </Link>
           </div>
         </div>
       )}

@@ -3,7 +3,7 @@ export function connectionControl(status, hasPortalContext, accountReady) {
     return { kind: 'connected', label: '✓ Connected to WiFi', disabled: true };
   }
 
-  if (status === 'connecting' || status === 'checking') {
+  if (status === 'connecting' || status === 'checking' || status === 'provisioning') {
     return { kind: 'connecting', label: 'Connecting...', disabled: true };
   }
 
@@ -15,5 +15,5 @@ export function connectionControl(status, hasPortalContext, accountReady) {
 }
 
 export function canPrepareConnection(status, currentCheckComplete) {
-  return currentCheckComplete && !['active', 'connecting', 'checking', 'unknown'].includes(status);
+  return currentCheckComplete && !['active', 'connecting', 'checking', 'provisioning', 'unknown'].includes(status);
 }

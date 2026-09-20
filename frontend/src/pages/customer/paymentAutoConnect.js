@@ -21,7 +21,7 @@ export function canBeginAutoConnect({
       && hasPortalContext
       && hasPurchase
       && hasCredentials
-      && canPrepareConnection(connectionStatus, currentCheckComplete),
+      && (connectionStatus === 'provisioning' || canPrepareConnection(connectionStatus, currentCheckComplete)),
   );
 }
 
