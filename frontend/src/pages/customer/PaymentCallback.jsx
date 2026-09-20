@@ -2,12 +2,16 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
 import api from '../../services/api';
-import { paymentSuccessDestination } from './paymentAutoConnect';
+import { paymentSuccessDestination, restorePaystackPortalContext } from './paymentAutoConnect';
 
 export default function PaymentCallback() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const reference = params.get('reference') || params.get('trxref');
+  const [hasPortalContext] = useState(() => restorePaystackPortalContext(
+    window.localStorage,
+    window.sessionStorage,
+  ));
   const [state, setState] = useState(reference ? 'verifying' : 'error');
   const [message, setMessage] = useState(reference
     ? 'Confirming your payment securely with Paystack…'
@@ -32,7 +36,7 @@ export default function PaymentCallback() {
           // MikroTik login must be submitted by this browser from the
           // hotspot device. The dashboard already waits for asynchronous
           // provisioning and performs that browser-side login safely.
-          navigate(paymentSuccessDestination(Boolean(sessionStorage.getItem('guest_login_url'))), { replace: true });
+          navigate(paymentSuccessDestination(hasPortalContext), { replace: true });
           return;
         }
 
@@ -72,7 +76,7 @@ export default function PaymentCallback() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [navigate, reference]);
+  }, [hasPortalContext, navigate, reference]);
 
   const Icon = state === 'success'
     ? CheckCircle2
@@ -96,7 +100,7 @@ export default function PaymentCallback() {
       <p className="mb-1 text-sm text-slate-500">{message}</p>
       {reference && <p className="mb-6 font-mono text-xs text-slate-400">Ref: {reference}</p>}
       <Link
-        to={paymentSuccessDestination(Boolean(sessionStorage.getItem('guest_login_url')))}
+        to={paymentSuccessDestination(hasPortalContext)}
         className="inline-block rounded-md bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
       >
         Go to Dashboard

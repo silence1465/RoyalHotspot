@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Wifi } from 'lucide-react';
 import api from '../../services/api';
 import Modal from '../../components/Modal';
+import { preservePaystackPortalContext } from './paymentAutoConnect';
 
 const currency = (n) => new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(n || 0);
 const checkoutFee = (price, method) => method === 'paystack' ? Math.round(Number(price) * 2) / 100 : 0;
@@ -85,6 +86,7 @@ export default function BuyInternet() {
       const { data } = await api.post('/customer/purchases', payload);
 
       if (data.authorization_url) {
+        preservePaystackPortalContext(window.sessionStorage, window.localStorage);
         window.location.href = data.authorization_url;
         return;
       }

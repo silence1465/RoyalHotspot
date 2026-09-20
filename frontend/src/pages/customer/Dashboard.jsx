@@ -453,9 +453,13 @@ export default function CustomerDashboard() {
       {purchase?.policy_access_status === 'data_exhausted' && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           <p className="font-semibold">Data allowance exhausted</p>
-          <p className="mt-1 text-xs">This package no longer provides internet access. You can purchase another package.</p>
-          <Link to="/buy" className="mt-3 inline-block rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700">
-            Buy another package
+          <p className="mt-1 text-xs">
+            {freeInternetOffer?.can_claim
+              ? 'This package no longer provides internet access. Free internet is currently available.'
+              : 'This package no longer provides internet access. You can purchase another package.'}
+          </p>
+          <Link to={freeInternetOffer?.can_claim ? '/free-trial' : '/buy'} className="mt-3 inline-block rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-700">
+            {freeInternetOffer?.can_claim ? 'Free Internet' : 'Buy another package'}
           </Link>
         </div>
       )}
