@@ -8,14 +8,14 @@ use App\Models\ActivityLog;
 use App\Models\BandwidthLog;
 use App\Models\MonthlyCapacityAdjustment;
 use App\Models\Purchase;
-use App\Services\FupService;
+use App\Models\RouterIsp;
 use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 class BandwidthController extends Controller
 {
-    public function summary(Request $request, FupService $fup)
+    public function summary(Request $request)
     {
         $today = now()->toDateString();
         $monthStart = now()->startOfMonth()->toDateString();
@@ -59,23 +59,34 @@ class BandwidthController extends Controller
             ];
         });
 
-        $capacity = MonthlyCapacityAdjustment::currentForMonth(now());
-        $monthUsed = (int) ($monthTotals->bytes_in ?? 0) + (int) ($monthTotals->bytes_out ?? 0);
-        $capacitySummary = null;
-        if ($capacity) {
-            $usable = (int) floor($capacity->capacity_bytes * (100 - $capacity->reserve_percent) / 100);
-            $remaining = max(0, $usable - $monthUsed);
-            $remainingDays = now()->daysInMonth - now()->day + 1;
-            $capacitySummary = [
-                'capacity_bytes' => $capacity->capacity_bytes,
-                'reserve_percent' => $capacity->reserve_percent,
-                'usable_bytes' => $usable,
-                'remaining_bytes' => $remaining,
-                'daily_target_bytes' => $remainingDays > 0 ? (int) floor($remaining / $remainingDays) : 0,
-                'projected_month_end_bytes' => now()->day > 0 ? (int) round($monthUsed / now()->day * now()->daysInMonth) : 0,
-                'control' => $fup->monthlyControl(),
-            ];
-        }
+        $isps = RouterIsp::with('router:id,name,location')
+            ->where('enabled', true)
+            ->when($routerIds !== null, fn ($query) => $query->whereIn('router_id', $routerIds))
+            ->orderBy('priority')->orderBy('id')->get()
+            ->map(function (RouterIsp $isp) {
+                $capacity = $isp->capacity_summary;
+
+                return [
+                    'id' => $isp->id,
+                    'router_id' => $isp->router_id,
+                    'router_name' => $isp->router?->name,
+                    'name' => $isp->name,
+                    'wan_interface' => $isp->wan_interface,
+                    'capacity_bytes' => $capacity['capacity_bytes'],
+                    'reserved_bytes' => $capacity['reserved_bytes'],
+                    'remaining_bytes' => $capacity['remaining_bytes'],
+                    'subscriber_limit' => $capacity['subscriber_limit'],
+                    'subscribers_allocated' => $capacity['subscribers_allocated'],
+                    'subscriber_slots_remaining' => $capacity['subscriber_slots_remaining'],
+                ];
+            });
+
+        $configuredIsps = $isps->whereNotNull('capacity_bytes');
+        $ispCapacityTotals = $configuredIsps->isEmpty() ? null : [
+            'capacity_bytes' => $configuredIsps->sum('capacity_bytes'),
+            'reserved_bytes' => $configuredIsps->sum('reserved_bytes'),
+            'remaining_bytes' => $configuredIsps->sum('remaining_bytes'),
+        ];
 
         return response()->json([
             'today_total' => [
@@ -87,11 +98,8 @@ class BandwidthController extends Controller
                 'bytes_out' => (int) ($monthTotals->bytes_out ?? 0),
             ],
             'users' => $users,
-            'capacity' => $capacitySummary,
-            'capacity_history' => MonthlyCapacityAdjustment::with('administrator:id,name')
-                ->whereDate('month', now()->startOfMonth()->toDateString())
-                ->latest('id')
-                ->get(),
+            'isp_capacity_totals' => $ispCapacityTotals,
+            'isps' => $isps->values(),
         ]);
     }
 

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\Admin\ActiveUsersController;
+use App\Http\Controllers\Admin\BandwidthController;
 use App\Http\Controllers\Admin\FreeTrialCampaignController;
 use App\Http\Controllers\Admin\PackageController as AdminPackageController;
 use App\Http\Controllers\Admin\ReportController;
@@ -15,6 +16,7 @@ use App\Models\InternetPackage;
 use App\Models\Purchase;
 use App\Models\Router;
 use App\Models\RouterPackageProfile;
+use App\Models\RouterIsp;
 use App\Models\SystemSetting;
 use App\Services\PurchaseService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,6 +26,63 @@ use Tests\TestCase;
 class OperationalFlowTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_bandwidth_summary_uses_selected_router_isp_capacity(): void
+    {
+        $selectedRouter = Router::factory()->create(['name' => 'Tarkwa']);
+        $otherRouter = Router::factory()->create(['name' => 'Accra']);
+        $selectedIsp = RouterIsp::create([
+            'router_id' => $selectedRouter->id,
+            'name' => 'MTN',
+            'wan_interface' => 'ether1',
+            'gateway' => '192.168.1.1',
+            'routing_table' => 'to_ISP1',
+            'connection_mark' => 'ISP1_conn',
+            'monthly_capacity_bytes' => 1024 * 1024 * 1024,
+            'subscriber_limit' => 200,
+            'priority' => 100,
+            'enabled' => true,
+        ]);
+        RouterIsp::create([
+            'router_id' => $otherRouter->id,
+            'name' => 'Other ISP',
+            'wan_interface' => 'ether2',
+            'gateway' => '192.168.2.1',
+            'routing_table' => 'to_ISP2',
+            'monthly_capacity_bytes' => 2 * 1024 * 1024 * 1024,
+            'priority' => 100,
+            'enabled' => true,
+        ]);
+        $customer = Customer::factory()->create();
+        $package = InternetPackage::factory()->create();
+        Purchase::create([
+            'customer_id' => $customer->id,
+            'package_id' => $package->id,
+            'router_id' => $selectedRouter->id,
+            'router_isp_id' => $selectedIsp->id,
+            'capacity_month' => now()->startOfMonth()->toDateString(),
+            'capacity_reserved_bytes' => 256 * 1024 * 1024,
+            'subtotal' => 1,
+            'payment_fee' => 0,
+            'amount' => 1,
+            'reference' => 'ISP-CAPACITY-TEST',
+            'payment_method' => 'momo',
+            'fulfillment_type' => 'live',
+            'status' => 'active',
+        ]);
+
+        $request = Request::create('/api/v1/admin/bandwidth/summary');
+        $request->attributes->set('admin_router_ids', [$selectedRouter->id]);
+        $payload = app(BandwidthController::class)->summary($request)->getData(true);
+
+        $this->assertCount(1, $payload['isps']);
+        $this->assertSame('MTN', $payload['isps'][0]['name']);
+        $this->assertSame(1073741824, $payload['isp_capacity_totals']['capacity_bytes']);
+        $this->assertSame(268435456, $payload['isp_capacity_totals']['reserved_bytes']);
+        $this->assertSame(805306368, $payload['isp_capacity_totals']['remaining_bytes']);
+        $this->assertSame(1, $payload['isps'][0]['subscribers_allocated']);
+        $this->assertSame(199, $payload['isps'][0]['subscriber_slots_remaining']);
+    }
 
     public function test_momo_bonus_can_be_configured_in_hours(): void
     {
