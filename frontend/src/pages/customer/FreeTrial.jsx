@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Gift } from 'lucide-react';
 import api from '../../services/api';
-import { isLiveConnectionReady, paymentSuccessDestination } from './paymentAutoConnect';
+import { isLiveConnectionReady } from './paymentAutoConnect';
+import { prepareAndSubmitHotspotLogin } from './hotspotAutoLogin';
 
 const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
@@ -32,7 +33,8 @@ export default function FreeTrial() {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         const { data: status } = await api.get(`/customer/purchases/${encodeURIComponent(reference)}/status`);
         if (isLiveConnectionReady(status)) {
-          navigate(paymentSuccessDestination(Boolean(sessionStorage.getItem('guest_login_url'))), { replace: true });
+          const connection = await prepareAndSubmitHotspotLogin(api);
+          if (!connection.submitted) navigate('/dashboard', { replace: true });
           return;
         }
         if (status.status === 'pending_activation') {

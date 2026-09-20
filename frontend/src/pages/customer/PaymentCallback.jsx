@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock3, Loader2, XCircle } from 'lucide-react';
 import api from '../../services/api';
-import { paymentSuccessDestination, restorePaystackPortalContext } from './paymentAutoConnect';
+import { isLiveConnectionReady, paymentSuccessDestination, restorePaystackPortalContext } from './paymentAutoConnect';
+import { prepareAndSubmitHotspotLogin } from './hotspotAutoLogin';
+
+const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 export default function PaymentCallback() {
   const [params] = useSearchParams();
@@ -33,10 +36,36 @@ export default function PaymentCallback() {
         if (data.success) {
           setState('success');
           setMessage('Payment verified. Preparing your automatic WiFi connection…');
-          // MikroTik login must be submitted by this browser from the
-          // hotspot device. The dashboard already waits for asynchronous
-          // provisioning and performs that browser-side login safely.
-          navigate(paymentSuccessDestination(hasPortalContext), { replace: true });
+          if (!hasPortalContext) {
+            navigate(paymentSuccessDestination(false), { replace: true });
+            return;
+          }
+
+          // Wait for RouterOS provisioning, then submit the login from this
+          // hotspot device directly instead of relying on a route effect.
+          for (let attempt = 0; attempt < 30; attempt += 1) {
+            const { data: status } = await api.get(`/customer/purchases/${encodeURIComponent(reference)}/status`);
+            if (cancelled) return;
+            if (isLiveConnectionReady(status)) {
+              const connection = await prepareAndSubmitHotspotLogin(api);
+              if (!connection.submitted) navigate('/dashboard', { replace: true });
+              return;
+            }
+            if (status.status === 'pending_activation') {
+              setState('error');
+              setMessage('Payment succeeded, but the hotspot account could not be prepared. Please contact support.');
+              return;
+            }
+            if (status.status === 'queued') {
+              setState('waiting');
+              setMessage('Payment succeeded. Your package is waiting for available capacity.');
+              return;
+            }
+            await wait(2000);
+          }
+
+          setState('waiting');
+          setMessage('Payment succeeded. Hotspot activation is taking longer than expected; check your dashboard shortly.');
           return;
         }
 
