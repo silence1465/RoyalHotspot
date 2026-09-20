@@ -98,14 +98,14 @@ class DataCapEnforcementTest extends TestCase
         foreach ($responses as $counters) {
             $mikrotik->shouldReceive('getHotspotUsers')->once()->andReturn([
                 'success' => true,
-                'data' => [['user' => 'counter-cap'] + $counters],
+                'data' => [['name' => 'counter-cap'] + $counters],
             ]);
         }
         $this->app->instance(MikrotikServiceFactory::class, $this->factory($mikrotik));
 
-        $this->artisan('bandwidth:snapshot')->assertSuccessful();
-        $this->artisan('bandwidth:snapshot')->assertSuccessful();
-        $this->artisan('bandwidth:snapshot')->assertSuccessful();
+        $this->artisan('bandwidth:snapshot')->expectsOutput('Polled 1 hotspot user counter(s) across live routers.')->assertSuccessful();
+        $this->artisan('bandwidth:snapshot')->expectsOutput('Polled 1 hotspot user counter(s) across live routers.')->assertSuccessful();
+        $this->artisan('bandwidth:snapshot')->expectsOutput('Polled 1 hotspot user counter(s) across live routers.')->assertSuccessful();
 
         $this->assertSame(1150, $purchase->fresh()->cycle_bytes_used);
         $this->assertDatabaseHas('bandwidth_logs', [

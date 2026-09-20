@@ -12,11 +12,13 @@ const currency = (n, c = 'GHS') => new Intl.NumberFormat('en-GH', { style: 'curr
 export default function CustomerDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const autoConnectRequested = searchParams.get('auto_connect') === '1';
+  const confirmationSessionParam = searchParams.get('confirm_session');
   const autoConnectStarted = useRef(false);
   const provisioningAttempts = useRef(0);
   const pendingSessionOnLoad = useRef(
-    searchParams.get('confirm_session') || sessionStorage.getItem('hotspot_pending_session'),
+    confirmationSessionParam || sessionStorage.getItem('hotspot_pending_session'),
   );
+  const [pendingSessionId, setPendingSessionId] = useState(pendingSessionOnLoad.current);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -157,10 +159,12 @@ export default function CustomerDashboard() {
       });
       if (prepared.connected === true || prepared.status === 'active') {
         sessionStorage.removeItem('hotspot_pending_session');
+        setPendingSessionId(null);
         setConnection({ status: 'active', message: 'Connected. Your internet is active.' });
         return;
       }
       sessionStorage.setItem('hotspot_pending_session', prepared.session_id);
+      setPendingSessionId(prepared.session_id);
 
       const form = document.createElement('form');
       form.method = 'POST';
@@ -256,11 +260,19 @@ export default function CustomerDashboard() {
   };
 
   useEffect(() => {
-    const sessionId = searchParams.get('confirm_session') || sessionStorage.getItem('hotspot_pending_session');
+    const sessionId = confirmationSessionParam || pendingSessionId;
     if (!sessionId) return undefined;
     let cancelled = false;
     let attempts = 0;
+    let retryTimer;
     setConnection({ status: 'connecting', message: 'Confirming your internet connection...' });
+
+    const finishConfirmation = (nextConnection) => {
+      sessionStorage.removeItem('hotspot_pending_session');
+      setPendingSessionId(null);
+      setConnection(nextConnection);
+      if (confirmationSessionParam) setSearchParams({}, { replace: true });
+    };
 
     const confirm = async () => {
       attempts += 1;
@@ -268,34 +280,41 @@ export default function CustomerDashboard() {
         const { data: result } = await api.get(`/customer/hotspot/sessions/${encodeURIComponent(sessionId)}`);
         if (cancelled) return;
         if (result.status === 'active') {
-          sessionStorage.removeItem('hotspot_pending_session');
-          setConnection({ status: 'active', message: 'Connected. Your internet is now active.' });
-          setSearchParams({}, { replace: true });
+          finishConfirmation({ status: 'active', message: 'Connected. Your internet is now active.' });
           return;
         }
         if (result.status === 'failed') {
-          sessionStorage.removeItem('hotspot_pending_session');
-          setConnection({ status: 'failed', message: result.failure_message || 'WiFi connection failed. Please try again.' });
+          finishConfirmation({ status: 'failed', message: result.failure_message || 'WiFi connection failed. Please try again.' });
           return;
         }
       } catch (err) {
-        if (err.response?.status === 404) sessionStorage.removeItem('hotspot_pending_session');
+        if (cancelled) return;
+        if (err.response?.status === 404) {
+          finishConfirmation({ status: 'failed', message: 'This WiFi connection attempt is no longer available. Please try again.' });
+          return;
+        }
         if (err.response?.status === 429) {
           const retryAfter = Math.max(2, Number(err.response.headers?.['retry-after']) || 5);
-          if (!cancelled && attempts < 15) window.setTimeout(confirm, retryAfter * 1000);
+          if (attempts < 15) {
+            retryTimer = window.setTimeout(confirm, retryAfter * 1000);
+          } else {
+            finishConfirmation({ status: 'failed', message: 'WiFi confirmation is temporarily busy. Tap Connect to WiFi to check again.' });
+          }
           return;
         }
       }
       if (!cancelled && attempts < 15) {
-        window.setTimeout(confirm, 2000);
+        retryTimer = window.setTimeout(confirm, 2000);
       } else if (!cancelled) {
-        sessionStorage.removeItem('hotspot_pending_session');
-        setConnection({ status: 'failed', message: 'WiFi connection failed. Please try again.' });
+        finishConfirmation({ status: 'failed', message: 'WiFi connection could not be confirmed. Tap Connect to WiFi to check again.' });
       }
     };
     confirm();
-    return () => { cancelled = true; };
-  }, [searchParams, setSearchParams]);
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [confirmationSessionParam, pendingSessionId, setSearchParams]);
 
   useEffect(() => {
     if (searchParams.get('auto_connect') !== '1' || !data || autoConnectStarted.current || !currentConnectionChecked || connection.status === 'active' || connection.status === 'unknown') {

@@ -34,7 +34,11 @@ class SnapshotBandwidthUsage extends Command
             }
 
             foreach ($result['data'] as $session) {
-                $username = $session['user'] ?? null;
+                // /ip hotspot user print identifies stored accounts with
+                // `name`. The `user` field belongs to /ip hotspot active.
+                // Reading `user` here silently skipped every RouterOS user
+                // and prevented terminal counter samples from being saved.
+                $username = $session['name'] ?? null;
                 if (! $username) {
                     continue;
                 }
