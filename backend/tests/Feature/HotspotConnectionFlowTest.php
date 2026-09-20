@@ -194,6 +194,53 @@ class HotspotConnectionFlowTest extends TestCase
         $this->assertSame('pending_activation', $purchase->fresh()->status);
     }
 
+    public function test_usage_policy_failure_revokes_partial_access_and_restores_unstarted_timer(): void
+    {
+        [$customer, $router, $purchase] = $this->records('policy-failure-user');
+        $purchase->update([
+            'usage_policy' => 'data_cap',
+            'data_allowance_bytes' => 20 * 1024 * 1024,
+            'base_speed_limit' => '5M/5M',
+        ]);
+        $hotspotUser = $this->hotspotUser($customer, $router, 'policy-failure-user');
+        $mikrotik = Mockery::mock(MikrotikService::class);
+        $mikrotik->shouldReceive('ensureHotspotUserProfile')->once()->andReturn(['success' => true, 'data' => []]);
+        $mikrotik->shouldReceive('enableHotspotUser')->once()->with('*USER')->andReturn(['success' => true]);
+        $mikrotik->shouldReceive('changeUserProfile')->once()->with('*USER', 'weekly')->andReturn(['success' => true]);
+        $mikrotik->shouldReceive('verifyHotspotUser')->once()->with('policy-failure-user', 'weekly')->andReturn([
+            'success' => true,
+            'data' => ['mikrotik_user_id' => '*USER'],
+        ]);
+        $mikrotik->shouldReceive('configureUserUsagePolicy')->once()
+            ->with('*USER', '5M/5M', 20 * 1024 * 1024)
+            ->andReturn(['success' => false, 'error' => 'unknown parameter rate-limit']);
+        $mikrotik->shouldReceive('disableAndDisconnectHotspotUser')->once()
+            ->with('policy-failure-user', '*USER')
+            ->andReturn(['success' => true]);
+        $job = new ActivateHotspotUserJob($purchase->id);
+        $exception = null;
+
+        try {
+            $job->handle($this->factory($mikrotik));
+            $this->fail('Usage-policy failure should throw for a queue retry.');
+        } catch (\RuntimeException $caught) {
+            $exception = $caught;
+        }
+
+        $this->assertTrue($hotspotUser->fresh()->disabled);
+        $this->assertSame('active', $purchase->fresh()->status);
+
+        $job->failed($exception);
+        $purchase->refresh();
+        $this->assertSame('pending_activation', $purchase->status);
+        $this->assertNull($purchase->starts_at);
+        $this->assertNull($purchase->expires_at);
+        $this->assertDatabaseHas('activity_logs', [
+            'customer_id' => $customer->id,
+            'action' => 'purchase.activation_failed',
+        ]);
+    }
+
     public function test_waiting_live_purchase_starts_once_and_valid_reconnect_keeps_its_timer(): void
     {
         [$customer, $router, $purchase] = $this->records('timer-user');

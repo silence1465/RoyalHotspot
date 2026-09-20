@@ -349,17 +349,19 @@ class MikrotikService
     /** Reset prior-cycle counters and configure RouterOS's native hard cap. */
     public function configureUserUsagePolicy(string $id, ?string $rateLimit, ?int $limitBytesTotal): array
     {
-        return $this->run('configure-user-usage-policy', function (Client $client) use ($id, $rateLimit, $limitBytesTotal) {
+        return $this->run('configure-user-usage-policy', function (Client $client) use ($id, $limitBytesTotal) {
             $client->query(
                 (new Query('/ip/hotspot/user/reset-counters'))->equal('.id', $id)
             )->read();
 
+            // RouterOS HotSpot users support limit-bytes-total, but
+            // rate-limit belongs to /ip hotspot user profile. Sending
+            // rate-limit here makes RouterOS reject the entire command,
+            // leaving the user uncapped. The base rate is already applied
+            // by ensureHotspotUserProfile().
             $query = (new Query('/ip/hotspot/user/set'))
                 ->equal('.id', $id)
                 ->equal('limit-bytes-total', (string) ($limitBytesTotal ?? 0));
-            if ($rateLimit) {
-                $query->equal('rate-limit', $rateLimit);
-            }
 
             return $client->query($query)->read();
         });

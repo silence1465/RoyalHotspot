@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\ActivityLog;
 use App\Models\HotspotUser;
 use App\Models\Purchase;
 use App\Services\FupService;
@@ -46,6 +47,17 @@ class ActivateHotspotUserJob implements ShouldQueue
             return;
         }
 
+        try {
+            $this->provision($purchase, $mikrotikFactory);
+        } catch (\Throwable $exception) {
+            $this->revokePartialAccess($purchase, $mikrotikFactory);
+
+            throw $exception;
+        }
+    }
+
+    private function provision(Purchase $purchase, MikrotikServiceFactory $mikrotikFactory): void
+    {
         $router = $purchase->router;
         $mikrotik = $mikrotikFactory->make($router);
         $profileName = $router->profileNameFor($purchase->package);
@@ -256,7 +268,41 @@ class ActivateHotspotUserJob implements ShouldQueue
         $purchase = Purchase::find($this->purchaseId);
 
         if ($purchase) {
-            $purchase->update(['status' => 'pending_activation']);
+            $values = ['status' => 'pending_activation'];
+            if ($purchase->payment_method !== 'free_trial') {
+                $values['starts_at'] = null;
+                $values['expires_at'] = null;
+            }
+            $purchase->update($values);
+
+            ActivityLog::record(
+                'purchase.activation_failed',
+                "Purchase {$purchase->reference} activation failed and partial MikroTik access was revoked: {$exception->getMessage()}",
+                $purchase->customer_id ? ['customer_id' => $purchase->customer_id] : []
+            );
         }
+    }
+
+    private function revokePartialAccess(Purchase $purchase, MikrotikServiceFactory $mikrotikFactory): void
+    {
+        if (! $purchase->customer_id || ! $purchase->router) {
+            return;
+        }
+
+        $hotspotUser = HotspotUser::where('customer_id', $purchase->customer_id)
+            ->where('router_id', $purchase->router_id)
+            ->first();
+        if (! $hotspotUser) {
+            return;
+        }
+
+        try {
+            $mikrotikFactory->make($purchase->router)
+                ->disableAndDisconnectHotspotUser($hotspotUser->username, $hotspotUser->mikrotik_user_id);
+        } catch (\Throwable) {
+            // Preserve the original provisioning exception for the queue.
+        }
+
+        $hotspotUser->update(['disabled' => true]);
     }
 }
