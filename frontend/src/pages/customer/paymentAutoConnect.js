@@ -56,6 +56,10 @@ export function paymentSuccessDestination(hasPortalContext) {
   return hasPortalContext ? '/dashboard?auto_connect=1' : '/dashboard';
 }
 
+export function isLiveConnectionReady(purchase) {
+  return Boolean(purchase?.status === 'active' && purchase?.connection_ready);
+}
+
 export function shouldPollProvisioning({ requested, hasPortalContext, hasPurchase, hasCredentials, attempts }) {
   return Boolean(requested && hasPortalContext && hasPurchase && !hasCredentials && attempts < 30);
 }

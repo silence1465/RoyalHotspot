@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Gift } from 'lucide-react';
 import api from '../../services/api';
+import { isLiveConnectionReady, paymentSuccessDestination } from './paymentAutoConnect';
+
+const wait = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 function remaining(end) {
   const ms = Math.max(0, new Date(end) - new Date());
@@ -20,10 +23,30 @@ export default function FreeTrial() {
   const claim = async () => {
     setBusy(true); setError('');
     try {
-      await api.post('/customer/free-trial/claim', { campaign_id: data.campaign.id });
-      navigate('/dashboard?auto_connect=1');
+      const { data: claimed } = await api.post('/customer/free-trial/claim', { campaign_id: data.campaign.id });
+      const reference = claimed.purchase?.reference;
+      if (!reference) throw new Error('The free package was created without a reference.');
+
+      // Match the MoMo flow: wait until the asynchronous RouterOS job has
+      // produced usable credentials before entering dashboard auto-connect.
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const { data: status } = await api.get(`/customer/purchases/${encodeURIComponent(reference)}/status`);
+        if (isLiveConnectionReady(status)) {
+          navigate(paymentSuccessDestination(Boolean(sessionStorage.getItem('guest_login_url'))), { replace: true });
+          return;
+        }
+        if (status.status === 'pending_activation') {
+          throw new Error('Your free package could not be prepared on the router. Please contact support.');
+        }
+        if (status.status === 'queued') {
+          throw new Error('Free internet is waiting for available capacity. Please try again shortly.');
+        }
+        await wait(2000);
+      }
+
+      throw new Error('Your free package is taking longer than expected to activate. Please try again shortly.');
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not activate free internet.');
+      setError(err.response?.data?.message || err.message || 'Could not activate free internet.');
       setBusy(false);
     }
   };
@@ -36,7 +59,7 @@ export default function FreeTrial() {
         <div className="my-5 bg-emerald-50 border border-emerald-200 rounded-lg p-4"><p className="text-sm text-emerald-900">Claim now to receive approximately <strong>{remaining(campaign.ends_at)}</strong> of free internet.</p><p className="text-xs text-emerald-700 mt-2">All free access ends on {new Date(campaign.ends_at).toLocaleString()}, regardless of when it was claimed.</p></div>
         {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
         {data.claimed ? <p className="text-sm font-medium text-slate-500">You have already claimed this campaign.</p>
-          : data.can_claim ? <button onClick={claim} disabled={busy} className="w-full bg-emerald-600 text-white rounded-md py-2.5 font-semibold disabled:opacity-50">{busy ? 'Activating…' : 'Claim Free Internet'}</button>
+          : data.can_claim ? <button onClick={claim} disabled={busy} className="w-full bg-emerald-600 text-white rounded-md py-2.5 font-semibold disabled:opacity-50">{busy ? 'Preparing WiFi connection…' : 'Claim Free Internet'}</button>
             : <p className="rounded-md bg-slate-50 px-4 py-3 text-center text-sm font-medium text-slate-600">{data.claim_unavailable_reason || 'This campaign is currently unavailable to your account.'}</p>}
       </div>}
   </div>;

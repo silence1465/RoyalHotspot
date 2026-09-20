@@ -6,6 +6,7 @@ import StatusBadge from '../../components/StatusBadge';
 import CopyButton from '../../components/CopyButton';
 import CountdownTimer from '../../components/CountdownTimer';
 import SmsForwarderStatus from '../../components/SmsForwarderStatus';
+import { isLiveConnectionReady } from './paymentAutoConnect';
 
 const currency = (n) => new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(n || 0);
 
@@ -65,7 +66,7 @@ export default function PaymentPage() {
   }, [fetchOrder, order, reference]);
 
   useEffect(() => {
-    const liveReady = order?.status === 'active' && order.connection_ready;
+    const liveReady = isLiveConnectionReady(order);
     const voucherReady = ['completed', 'voucher_assigned'].includes(order?.status) && order?.has_voucher;
 
     if (liveReady || voucherReady) {

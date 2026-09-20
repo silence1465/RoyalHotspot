@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   canBeginAutoConnect,
+  isLiveConnectionReady,
   paymentSuccessDestination,
   preservePaystackPortalContext,
   restorePaystackPortalContext,
@@ -25,6 +26,12 @@ test('verified Paystack payment from hotspot enters dashboard auto-connect flow'
 
 test('payment outside hotspot opens dashboard without pretending it can auto-login', () => {
   assert.equal(paymentSuccessDestination(false), '/dashboard');
+});
+
+test('MoMo and free internet wait for live MikroTik credentials before auto-connect', () => {
+  assert.equal(isLiveConnectionReady({ status: 'active', connection_ready: true }), true);
+  assert.equal(isLiveConnectionReady({ status: 'active', connection_ready: false }), false);
+  assert.equal(isLiveConnectionReady({ status: 'pending_activation', connection_ready: true }), false);
 });
 
 test('Paystack redirect restores hotspot context and enters auto-connect flow', () => {
