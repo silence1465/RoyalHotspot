@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { CheckCircle2, Clock, AlertTriangle, XCircle, ChevronDown } from 'lucide-react';
+import { CheckCircle2, Clock, AlertTriangle, XCircle, ChevronDown, Loader2 } from 'lucide-react';
 import api from '../../services/api';
 import StatusBadge from '../../components/StatusBadge';
 import CopyButton from '../../components/CopyButton';
@@ -107,6 +107,20 @@ export default function PaymentPage() {
   if (loading) return <p className="text-sm text-slate-400">Loading…</p>;
   if (error || !order) {
     return <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-4 py-3">{error}</div>;
+  }
+
+  if (order.fulfillment_type === 'live' && order.status === 'active') {
+    return (
+      <div className="mx-auto max-w-md py-12 text-center" role="status" aria-live="polite">
+        <Loader2 className="mx-auto mb-4 h-12 w-12 animate-spin text-indigo-600" />
+        <h1 className="mb-2 text-xl font-semibold text-slate-900">Payment complete — connecting to WiFi</h1>
+        <p className="text-sm text-slate-500">Please wait while we prepare your hotspot account and connect this device…</p>
+        <div className="mx-auto my-5 h-1.5 max-w-xs overflow-hidden rounded-full bg-indigo-100">
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-indigo-600" />
+        </div>
+        <p className="font-mono text-xs text-slate-400">Ref: {reference}</p>
+      </div>
+    );
   }
 
   // ── Voucher already assigned — the success view. Never rendered

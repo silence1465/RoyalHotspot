@@ -34,8 +34,8 @@ export default function PaymentCallback() {
         if (cancelled) return;
 
         if (data.success) {
-          setState('success');
-          setMessage('Payment verified. Preparing your automatic WiFi connection…');
+          setState('connecting');
+          setMessage('Payment complete. Please wait while we connect you to WiFi…');
           if (!hasPortalContext) {
             navigate(paymentSuccessDestination(false), { replace: true });
             return;
@@ -107,33 +107,49 @@ export default function PaymentCallback() {
     };
   }, [hasPortalContext, navigate, reference]);
 
+  const isBusy = state === 'verifying' || state === 'connecting';
   const Icon = state === 'success'
     ? CheckCircle2
     : state === 'error'
       ? XCircle
-      : state === 'verifying'
+      : isBusy
         ? Loader2
         : Clock3;
   const iconColor = state === 'success'
     ? 'text-emerald-500'
     : state === 'error'
       ? 'text-red-500'
-      : 'text-amber-500';
+      : state === 'connecting'
+        ? 'text-indigo-600'
+        : 'text-amber-500';
 
   return (
     <div className="mx-auto max-w-md py-12 text-center">
-      <Icon className={`mx-auto mb-4 h-12 w-12 ${iconColor} ${state === 'verifying' ? 'animate-spin' : ''}`} />
+      <Icon className={`mx-auto mb-4 h-12 w-12 ${iconColor} ${isBusy ? 'animate-spin' : ''}`} />
       <h1 className="mb-2 text-xl font-semibold text-slate-900">
-        {state === 'success' ? 'Payment verified' : state === 'error' ? 'Verification problem' : 'Confirming payment'}
+        {state === 'connecting'
+          ? 'Payment complete — connecting to WiFi'
+          : state === 'success'
+            ? 'Payment verified'
+            : state === 'error'
+              ? 'Verification problem'
+              : 'Confirming payment'}
       </h1>
       <p className="mb-1 text-sm text-slate-500">{message}</p>
+      {state === 'connecting' && (
+        <div className="mx-auto my-5 h-1.5 max-w-xs overflow-hidden rounded-full bg-indigo-100" role="status" aria-label="Connecting to WiFi">
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-indigo-600" />
+        </div>
+      )}
       {reference && <p className="mb-6 font-mono text-xs text-slate-400">Ref: {reference}</p>}
-      <Link
-        to={paymentSuccessDestination(hasPortalContext)}
-        className="inline-block rounded-md bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
-      >
-        Go to Dashboard
-      </Link>
+      {!isBusy && (
+        <Link
+          to={paymentSuccessDestination(hasPortalContext)}
+          className="inline-block rounded-md bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+          Go to Dashboard
+        </Link>
+      )}
     </div>
   );
 }
