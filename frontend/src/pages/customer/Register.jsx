@@ -12,7 +12,11 @@ export default function CustomerRegister() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    const result = await login('/customer/register', form, 'customer');
+    const routerId = sessionStorage.getItem('portal_router_id');
+    const result = await login('/customer/register', {
+      ...form,
+      router_id: routerId ? Number(routerId) : null,
+    }, 'customer');
     if (result.success) {
         navigate(sessionStorage.getItem('guest_login_url') ? '/dashboard?auto_connect=1' : '/dashboard');
     } else {

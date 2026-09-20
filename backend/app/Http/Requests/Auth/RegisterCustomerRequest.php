@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Auth;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class RegisterCustomerRequest extends FormRequest
 {
@@ -19,6 +20,7 @@ class RegisterCustomerRequest extends FormRequest
             'email' => ['required', 'email', 'max:255', 'unique:customers,email'],
             'username' => ['required', 'string', 'max:50', 'alpha_dash', 'unique:customers,username'],
             'password' => ['required', 'string', 'min:8'],
+            'router_id' => ['nullable', 'integer', Rule::exists('routers', 'id')->whereNull('deleted_at')],
         ];
     }
 

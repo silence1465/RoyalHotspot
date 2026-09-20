@@ -43,7 +43,12 @@ export default function AdminCustomers() {
   }, [load]);
 
   const openDetail = (customer) => {
-    api.get(`/admin/customers/${customer.id}`).then(({ data }) => setDetail(data));
+    setError('');
+    api.get(`/admin/customers/${customer.id}`)
+      .then(({ data }) => setDetail(data))
+      .catch((requestError) => {
+        setError(requestError.response?.data?.message || 'Could not open this customer. Please refresh and try again.');
+      });
   };
 
   const [exporting, setExporting] = useState(false);
@@ -178,6 +183,10 @@ export default function AdminCustomers() {
         <CustomerDetailModal
           customer={detail}
           onClose={() => setDetail(null)}
+          onUpdated={(customer) => {
+            setDetail(customer);
+            load();
+          }}
           onDeleted={() => {
             setDetail(null);
             load();
@@ -199,6 +208,7 @@ function MiniStat({ label, value, tone = 'text-slate-900' }) {
 
 function customerRouters(customer) {
   const routers = [
+    customer.home_router,
     customer.current_purchase?.router,
     ...(customer.hotspot_users || []).map((user) => user.router),
   ].filter(Boolean);

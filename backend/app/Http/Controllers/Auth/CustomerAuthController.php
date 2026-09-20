@@ -23,6 +23,7 @@ class CustomerAuthController extends Controller
             'username' => $data['username'],
             'password' => Hash::make($data['password']),
             'status' => 'inactive', // becomes 'active' once a subscription activates
+            'home_router_id' => $data['router_id'] ?? null,
         ]);
 
         $token = $customer->createToken('customer-token', ['customer'])->plainTextToken;

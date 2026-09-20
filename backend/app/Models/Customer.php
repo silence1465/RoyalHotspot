@@ -18,7 +18,7 @@ class Customer extends Authenticatable
     use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 
     protected $fillable = [
-        'full_name', 'phone', 'email', 'username', 'password', 'status', 'current_purchase_id',
+        'full_name', 'phone', 'email', 'username', 'password', 'status', 'home_router_id', 'current_purchase_id',
     ];
 
     protected $hidden = [
@@ -37,6 +37,11 @@ class Customer extends Authenticatable
     public function currentPurchase()
     {
         return $this->belongsTo(Purchase::class, 'current_purchase_id');
+    }
+
+    public function homeRouter()
+    {
+        return $this->belongsTo(Router::class, 'home_router_id');
     }
 
     public function payments()

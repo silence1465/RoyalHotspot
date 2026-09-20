@@ -7,11 +7,13 @@ use App\Models\ActivityLog;
 use App\Models\Customer;
 use App\Models\HotspotSession;
 use App\Models\HotspotUser;
+use App\Models\Router;
 use App\Services\MikrotikServiceFactory;
 use App\Support\AdminRouterScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 
 class CustomerController extends Controller
 {
@@ -20,7 +22,10 @@ class CustomerController extends Controller
         $query = Customer::query();
         $routerIds = AdminRouterScope::ids($request);
         if ($routerIds !== null) {
-            $query->whereHas('purchases', fn ($purchases) => $purchases->whereIn('router_id', $routerIds));
+            $query->where(function ($customers) use ($routerIds) {
+                $customers->whereIn('home_router_id', $routerIds)
+                    ->orWhereHas('purchases', fn ($purchases) => $purchases->whereIn('router_id', $routerIds));
+            });
         }
 
         if ($search = $request->query('search')) {
@@ -43,19 +48,72 @@ class CustomerController extends Controller
     public function show(Request $request, Customer $customer)
     {
         $routerIds = AdminRouterScope::ids($request);
-        if ($routerIds !== null && ! $customer->purchases()->whereIn('router_id', $routerIds)->exists()) {
+        if (! $this->canAccessCustomer($customer, $routerIds)) {
             abort(404);
         }
 
         $methods = array_values(array_filter(['paystack', 'momo'], fn ($method) => $request->user()->hasPermission("transactions.{$method}.view")));
 
-        return response()->json(
-            $customer->load([
-                'subscriptions' => fn ($q) => $q->when($routerIds !== null, fn ($s) => $s->whereIn('router_id', $routerIds))->with(['package:id,name', 'router:id,name'])->latest(),
-                'payments' => fn ($q) => $q->whereIn('provider', $methods)->when($routerIds !== null, fn ($payments) => $payments->whereHas('purchase', fn ($p) => $p->whereIn('router_id', $routerIds)))->latest()->take(20),
-                'hotspotUsers' => fn ($q) => $q->when($routerIds !== null, fn ($users) => $users->whereIn('router_id', $routerIds))->with('router:id,name'),
-            ])
+        return response()->json($this->customerPayload(
+            $customer,
+            $routerIds,
+            $methods
+        ));
+    }
+
+    private function customerPayload(Customer $customer, ?array $routerIds, ?array $methods = null): array
+    {
+        $customer->load([
+            'homeRouter:id,name,location',
+            'purchases' => fn ($q) => $q->when($routerIds !== null, fn ($purchases) => $purchases->whereIn('router_id', $routerIds))->with(['package:id,name', 'router:id,name'])->latest(),
+            'payments' => fn ($q) => $q->when($methods !== null, fn ($payments) => $payments->whereIn('provider', $methods))->when($routerIds !== null, fn ($payments) => $payments->whereHas('purchase', fn ($p) => $p->whereIn('router_id', $routerIds)))->latest()->take(20),
+            'hotspotUsers' => fn ($q) => $q->when($routerIds !== null, fn ($users) => $users->whereIn('router_id', $routerIds))->with('router:id,name'),
+        ]);
+
+        $payload = $customer->toArray();
+        $payload['subscriptions'] = $payload['purchases'];
+        unset($payload['purchases']);
+        $payload['assignable_routers'] = Router::query()
+            ->when($routerIds !== null, fn ($routers) => $routers->whereIn('id', $routerIds))
+            ->orderBy('name')
+            ->get(['id', 'name', 'location'])
+            ->toArray();
+
+        return $payload;
+    }
+
+    private function canAccessCustomer(Customer $customer, ?array $routerIds): bool
+    {
+        return $routerIds === null
+            || ($customer->home_router_id && in_array((int) $customer->home_router_id, $routerIds, true))
+            || $customer->purchases()->whereIn('router_id', $routerIds)->exists();
+    }
+
+    public function update(Request $request, Customer $customer)
+    {
+        $routerIds = AdminRouterScope::ids($request);
+        abort_unless($this->canAccessCustomer($customer, $routerIds), 404);
+
+        $data = $request->validate([
+            'full_name' => ['required', 'string', 'max:255'],
+            'phone' => ['required', 'string', 'max:20', Rule::unique('customers', 'phone')->ignore($customer->id)],
+            'email' => ['nullable', 'email', 'max:255', Rule::unique('customers', 'email')->ignore($customer->id)],
+            'username' => ['required', 'string', 'max:50', 'alpha_dash', Rule::unique('customers', 'username')->ignore($customer->id)],
+            'home_router_id' => ['nullable', 'integer', Rule::exists('routers', 'id')->whereNull('deleted_at')],
+        ]);
+
+        if (! empty($data['home_router_id']) && $routerIds !== null && ! in_array((int) $data['home_router_id'], $routerIds, true)) {
+            abort(403, 'You cannot assign this customer to an unassigned router.');
+        }
+
+        $customer->update($data);
+        ActivityLog::record(
+            'customer.updated',
+            "Customer {$customer->username} details and home router were updated.",
+            ['user_id' => $request->user()->id]
         );
+
+        return response()->json($this->customerPayload($customer->fresh(), $routerIds));
     }
 
     public function resetHotspotPassword(

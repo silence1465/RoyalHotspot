@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Modal from '../../components/Modal';
 import StatusBadge from '../../components/StatusBadge';
 import TablePagination from '../../components/TablePagination';
@@ -8,15 +8,44 @@ import { useAuth } from '../../context/AuthContext';
 
 const currency = (n) => new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(n || 0);
 
-export default function CustomerDetailModal({ customer, onClose, onDeleted }) {
+export default function CustomerDetailModal({ customer, onClose, onDeleted, onUpdated }) {
   const { user } = useAuth();
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [form, setForm] = useState(customerForm(customer));
   const [resettingId, setResettingId] = useState(null);
   const [resetResult, setResetResult] = useState(null);
   const [resetError, setResetError] = useState('');
   const [deleting, setDeleting] = useState(false);
   const canResetPassword = user?.role === 'super_admin' || user?.permissions == null || user?.permissions?.includes('customers.manage');
+  const canEdit = canResetPassword;
   const subscriptionsPagination = useClientPagination(customer.subscriptions || []);
   const paymentsPagination = useClientPagination(customer.payments || []);
+
+  useEffect(() => {
+    setForm(customerForm(customer));
+  }, [customer]);
+
+  const saveCustomer = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setEditError('');
+    try {
+      const { data } = await api.patch(`/admin/customers/${customer.id}`, {
+        ...form,
+        email: form.email || null,
+        home_router_id: form.home_router_id ? Number(form.home_router_id) : null,
+      });
+      setEditing(false);
+      onUpdated?.(data);
+    } catch (error) {
+      const validation = error.response?.data?.errors;
+      setEditError(validation ? Object.values(validation).flat().join(' ') : (error.response?.data?.message || 'Could not update the customer.'));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const resetWifiPassword = async (hotspotUser) => {
     if (!window.confirm(`Reset the Wi-Fi password for ${hotspotUser.username} on ${hotspotUser.router?.name || 'this router'}? Existing sessions will be disconnected.`)) return;
@@ -53,6 +82,47 @@ export default function CustomerDetailModal({ customer, onClose, onDeleted }) {
   };
   return (
     <Modal title={customer.full_name} onClose={onClose} wide>
+      <div className="flex justify-end mb-3">
+        {canEdit && !editing && (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded-md border border-indigo-300 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50"
+          >
+            Edit Customer
+          </button>
+        )}
+      </div>
+
+      {editing ? (
+        <form onSubmit={saveCustomer} className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <EditField label="Full name" value={form.full_name} onChange={(value) => setForm({ ...form, full_name: value })} required />
+            <EditField label="Phone" value={form.phone} onChange={(value) => setForm({ ...form, phone: value })} required />
+            <EditField label="Email" type="email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} />
+            <EditField label="Username" value={form.username} onChange={(value) => setForm({ ...form, username: value })} required />
+            <label className="text-sm sm:col-span-2">
+              <span className="mb-1 block font-medium text-slate-700">Home router</span>
+              <select
+                value={form.home_router_id}
+                onChange={(event) => setForm({ ...form, home_router_id: event.target.value })}
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+              >
+                <option value="">Unassigned</option>
+                {(customer.assignable_routers || []).map((router) => (
+                  <option key={router.id} value={router.id}>{router.name}{router.location ? ` — ${router.location}` : ''}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Changing the home router controls the customer’s default router. Existing purchases and Wi-Fi accounts stay on their original routers.</p>
+          {editError && <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{editError}</div>}
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => { setEditing(false); setEditError(''); setForm(customerForm(customer)); }} className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-600">Cancel</button>
+            <button type="submit" disabled={saving} className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save Changes'}</button>
+          </div>
+        </form>
+      ) : (
       <div className="grid sm:grid-cols-3 gap-4 text-sm mb-5">
         <div>
           <p className="text-slate-400">Phone</p>
@@ -66,7 +136,13 @@ export default function CustomerDetailModal({ customer, onClose, onDeleted }) {
           <p className="text-slate-400">Status</p>
           <StatusBadge status={customer.status} />
         </div>
+        <div>
+          <p className="text-slate-400">Home router</p>
+          <p className="text-slate-800">{customer.home_router?.name || 'Unassigned'}</p>
+          {customer.home_router?.location && <p className="text-xs text-slate-400">{customer.home_router.location}</p>}
+        </div>
       </div>
+      )}
 
       <h3 className="text-sm font-semibold text-slate-700 mb-2">Wi-Fi Accounts</h3>
       <div className="border border-slate-200 rounded-md overflow-hidden mb-5">
@@ -178,5 +254,30 @@ export default function CustomerDetailModal({ customer, onClose, onDeleted }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+function customerForm(customer) {
+  return {
+    full_name: customer.full_name || '',
+    phone: customer.phone || '',
+    email: customer.email || '',
+    username: customer.username || '',
+    home_router_id: customer.home_router_id || '',
+  };
+}
+
+function EditField({ label, value, onChange, type = 'text', required = false }) {
+  return (
+    <label className="text-sm">
+      <span className="mb-1 block font-medium text-slate-700">{label}</span>
+      <input
+        type={type}
+        required={required}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
+      />
+    </label>
   );
 }
